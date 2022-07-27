@@ -2,5 +2,14 @@
 
 ```console
 $ curl -O binplz.dev/cowsay
-$ cowsay moo
+$ chmod +x cowsay
+$ ./cowsay moo
+ _____ 
+< moo >
+ ----- 
+        \   ^__^
+         \  (oo)\_______
+            (__)\       )\/\
+                ||----w |
+                ||     ||
 ```
