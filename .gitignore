@@ -27,3 +27,6 @@ cabal.project.local~
 .ghc.environment.*
 
 # End of https://www.toptal.com/developers/gitignore/api/haskell
+
+# Nix result files
+result

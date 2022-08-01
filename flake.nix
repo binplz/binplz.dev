@@ -6,9 +6,20 @@
 
   outputs = inputs:
     let
-      overlay = final: prev: { };
-      perSystem = system: { };
-    in
-    inputs.flake-utils.lib.eachDefaultSystem perSystem // overlay;
+      overlay = import nix/overlay.nix;
+      perSystem = system:
+        let
+          pkgs = import inputs.nixpkgs { inherit system; overlays = [ overlay ]; };
+        in
+        {
+          # defaultPackage = pkgs.purenix;
+          # packages.purenix = pkgs.purenix;
 
+          packages.docs = pkgs.binplz-docs;
+
+          # devShell = pkgs.hacking-on-purenix-shell;
+          # devShells = { };
+        };
+    in
+    { inherit overlay; } // inputs.flake-utils.lib.eachDefaultSystem perSystem;
 }

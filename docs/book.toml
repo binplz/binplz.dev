@@ -1,0 +1,8 @@
+[book]
+authors = ["Jonas Carpay", "Dennis Gosnell", "Hideaki Kawai"]
+language = "en"
+multilingual = false
+src = "src"
+
+[output.html]
+additional-css = ["theme/binplz.dev.css"]
