@@ -31,6 +31,8 @@
               hspkgs.hlint
               hspkgs.ormolu
               pkgs.bashInteractive
+              pkgs.rlwrap
+              pkgs.sqlite
             ];
           };
           defaultPackage = pkgs.binplz-server;

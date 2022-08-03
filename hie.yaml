@@ -7,10 +7,4 @@ cradle:
       config: {cradle: {cabal: {component: "lib:binplz-server"}}}
 
     - path: "app"
-      config: {cradle: {cabal: {component: "binplz-server:binplz-server-exe"}}}
-
-    - path: "test"
-      config: {cradle: {cabal: {component: "binplz-server:binplz-server-test"}}}
-
-    - path: "bench"
-      config: {cradle: {cabal: {component: "binplz-server:binplz-server-bench"}}}
+      config: {cradle: {cabal: {component: "binplz-server:binplz-server"}}}
