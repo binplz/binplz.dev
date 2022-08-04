@@ -187,5 +187,5 @@ withBinariesDB (ApplicationDB path) k = ExceptT $
 app :: IO ()
 app = run 8081 (serve (Proxy @API) (server (ServerConfig progs bins)))
   where
-    bins = ApplicationDB "bins.sqlite"
+    bins = ApplicationDB "appdb.sqlite"
     progs = ProgramDB "/nix/var/nix/profiles/per-user/root/channels/nixos/programs.sqlite"
