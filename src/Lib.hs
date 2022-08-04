@@ -111,7 +111,7 @@ resolvePackageName (ProgramDB dbpath) bin sys = do
 --   2. If buildable, build it
 --   3. Bump the count
 buildTriplet :: ApplicationDB -> Triplet -> ExceptT String IO ByteString
-buildTriplet appDB trip@(Triplet bin pkg sys) = withBinariesDB appDB $ \conn -> do
+buildTriplet appDB trip@(Triplet bin pkg sys) = withApplicationDB appDB $ \conn -> do
   errorFlags :: [Only Bool] <- liftIO $ query conn "SELECT error FROM binaries WHERE name = ? AND package = ? AND system = ?" (bin, pkg, show sys)
   case errorFlags of
     [Only True] -> do
@@ -169,8 +169,8 @@ nixBuild (Triplet bin pkg sys) = runExceptT $ do
 -- TODO what's a good name for this db?
 -- TODO rename name field to binary
 -- TODO maybe we should save (and even index by) store path?
-withBinariesDB :: ApplicationDB -> (Connection -> ExceptT e IO a) -> ExceptT e IO a
-withBinariesDB (ApplicationDB path) k = ExceptT $
+withApplicationDB :: ApplicationDB -> (Connection -> ExceptT e IO a) -> ExceptT e IO a
+withApplicationDB (ApplicationDB path) k = ExceptT $
   withConnection path $ \conn -> do
     execute_
       conn
