@@ -66,7 +66,7 @@ data Triplet = Triplet
     _tripSystem :: System
   }
 
-newtype BinariesDB = BinariesDB FilePath
+newtype ApplicationDB = ApplicationDB FilePath
 
 newtype ProgramDB = ProgramDB FilePath
 
@@ -75,7 +75,7 @@ newtype ProgramDB = ProgramDB FilePath
 -- TODO Make nix sources configurable?
 data ServerConfig = ServerConfig
   { _programDB :: ProgramDB,
-    _binaryDB :: BinariesDB
+    _binaryDB :: ApplicationDB
   }
 
 -- | Serve the API
@@ -84,7 +84,7 @@ data ServerConfig = ServerConfig
 --   2. Building the triplet
 -- If an error occurs, this is returned as a 400
 server :: ServerConfig -> Server API
-server (ServerConfig programDB binDB) =
+server (ServerConfig programDB appDB) =
   pure NoContent
     :<|> (\bin -> handle bin Nothing)
     :<|> (\pkg bin -> handle bin (Just pkg))
@@ -94,7 +94,7 @@ server (ServerConfig programDB binDB) =
       Handler . withExceptT (\err -> err400 {errBody = BSL.pack err}) $ do
         let sys = fromMaybe X86_64_Linux msys
         pkg <- maybe (resolvePackageName programDB bin sys) pure mpkg
-        buildTriplet binDB (Triplet bin pkg sys)
+        buildTriplet appDB (Triplet bin pkg sys)
 
 -- | Check the Nix programs database for a package that provides the given binary
 -- If there is a candidate package with the same name as the binary, that package is given priority.
@@ -110,8 +110,8 @@ resolvePackageName (ProgramDB dbpath) bin sys = do
 -- | 1. See if we know this triplet to be unbuildable
 --   2. If buildable, build it
 --   3. Bump the count
-buildTriplet :: BinariesDB -> Triplet -> ExceptT String IO ByteString
-buildTriplet binDB trip@(Triplet bin pkg sys) = withBinariesDB binDB $ \conn -> do
+buildTriplet :: ApplicationDB -> Triplet -> ExceptT String IO ByteString
+buildTriplet appDB trip@(Triplet bin pkg sys) = withBinariesDB appDB $ \conn -> do
   errorFlags :: [Only Bool] <- liftIO $ query conn "SELECT error FROM binaries WHERE name = ? AND package = ? AND system = ?" (bin, pkg, show sys)
   case errorFlags of
     [Only True] -> do
@@ -169,8 +169,8 @@ nixBuild (Triplet bin pkg sys) = runExceptT $ do
 -- TODO what's a good name for this db?
 -- TODO rename name field to binary
 -- TODO maybe we should save (and even index by) store path?
-withBinariesDB :: BinariesDB -> (Connection -> ExceptT e IO a) -> ExceptT e IO a
-withBinariesDB (BinariesDB path) k = ExceptT $
+withBinariesDB :: ApplicationDB -> (Connection -> ExceptT e IO a) -> ExceptT e IO a
+withBinariesDB (ApplicationDB path) k = ExceptT $
   withConnection path $ \conn -> do
     execute_
       conn
@@ -187,5 +187,5 @@ withBinariesDB (BinariesDB path) k = ExceptT $
 app :: IO ()
 app = run 8081 (serve (Proxy @API) (server (ServerConfig progs bins)))
   where
-    bins = BinariesDB "bins.sqlite"
+    bins = ApplicationDB "bins.sqlite"
     progs = ProgramDB "/nix/var/nix/profiles/per-user/root/channels/nixos/programs.sqlite"
