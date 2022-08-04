@@ -14,7 +14,7 @@
             };
         };
         binplz-server = final.haskell.lib.compose.justStaticExecutables final.haskellPackages.binplz-server;
-        binplz-docs = final.callPackage ../docs { };
+        binplz-docs = final.callPackage ./docs { };
       };
       perSystem = system:
         let
