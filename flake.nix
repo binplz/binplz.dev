@@ -10,7 +10,7 @@
         haskell = prev.haskell // {
           packageOverrides = hfinal: hprev:
             prev.haskell.packageOverrides hfinal hprev // {
-              binplz-server = hfinal.callCabal2nix "binplz-server" ./. { };
+              binplz-server = hfinal.callCabal2nix "binplz-server" ./binplz-server { };
             };
         };
         binplz-server = final.haskell.lib.compose.justStaticExecutables final.haskellPackages.binplz-server;

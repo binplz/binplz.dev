@@ -42,6 +42,7 @@ jobs:
           enable-stack: true
       ## For some reason, stack caching seems to be very brittle, and cause a lot of build failures.
       ## I haven't investigated very thoroughly what to best do about this, but for now, I'm just not caching stack builds.
+      - run: cd binplz-server
       - run: stack init --resolver ${{ matrix.resolver }}
       - run: stack build --resolver ${{ matrix.resolver }} --only-dependencies
       - run: stack build --resolver ${{ matrix.resolver }}
@@ -66,6 +67,7 @@ jobs:
             ~/.cabal
             dist-newstyle
           key: cabal-cache-${{ matrix.os }}-${{ matrix.ghc }}-${{ hashFiles('**/*.cabal') }}
+      - run: cd binplz-server
       - run: cabal new-build --only-dependencies
       - run: cabal new-build
       - run: cabal new-test --test-show-details=direct
