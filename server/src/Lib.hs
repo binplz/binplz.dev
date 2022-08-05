@@ -142,7 +142,21 @@ nixBuild :: Triplet -> IO (Either String ByteString)
 nixBuild (Triplet bin pkg sys) = runExceptT $ do
   -- TODO stream build process to stderr
   -- TODO make sure we can't get any XSS-like shenanigans
-  (exit, stdout, stderr) <- liftIO $ Proc.readProcessWithExitCode "nix" ["build", "--no-link", "--print-out-paths", packageString ""] ""
+  (exit, stdout, stderr) <-
+    liftIO $
+      Proc.readProcessWithExitCode
+        "nix"
+        ( ["build", packageString ""]
+            -- Don't make a result symlink, just print it to stdout
+            <> ["--no-link", "--print-out-paths"]
+            -- Only allow access to files from NIX_PATH. Derivations can't read files like `/etc/shadow`.
+            <> ["--option", "restrict-eval", "true"]
+            -- Disallow IFD.  Probably not necessary, since Nixpkgs doesn't contain derivations that do IFD, but better to be on the safe side.
+            <> ["--option", "allow-import-from-derivation", "false"]
+            -- Make sure the sandbox is always used.
+            <> ["--option", "sandbox-fallback", "false"]
+        )
+        ""
   liftIO . putStrLn $
     unlines
       [ "Finished a Nix build call",
