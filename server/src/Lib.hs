@@ -146,7 +146,7 @@ nixBuild (BinaryTriplet bin pkg sys) = runExceptT $ do
     liftIO $
       Proc.readProcessWithExitCode
         "nix"
-        ( ["build", packageString ""]
+        ( ["build", "nixpkgs#legacyPackages." <> show sys <> ".pkgsStatic." <> unPackageName pkg]
             -- Don't make a result symlink, just print it to stdout
             <> ["--no-link", "--print-out-paths"]
             -- Only allow access to files from NIX_PATH. Derivations can't read files like `/etc/shadow`.
@@ -174,8 +174,6 @@ nixBuild (BinaryTriplet bin pkg sys) = runExceptT $ do
       unless isExecutable $ throwError "Binary specified by the triplet was not an executable"
       liftIO $ BS.readFile fullPath
     _ -> throwError $ unlines ["An error occurred.", "  Exit code: " <> show exit, "  error:" <> stderr]
-  where
-    packageString = showString "nixpkgs#legacyPackages." . shows sys . showString ".pkgsStatic." . showString (unPackageName pkg)
 
 -- TODO rename name field to binary
 -- TODO maybe we should save (and even index by) store path?
