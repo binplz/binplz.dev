@@ -55,9 +55,9 @@ instance FromHttpApiData Platform where
   parseQueryParam "x86_64-linux" = pure X86_64_Linux
   parseQueryParam sys = Left $ "Unknown platform: " <> sys
 
--- | A Triplet uniquely identifies a binary in nixpkgs.
--- A Triplet is not a proof that that binary exists and is buildable, though.
-data Triplet = Triplet
+-- | A BinaryTriplet uniquely identifies a binary in nixpkgs.
+-- A BinaryTriplet is not a proof that that binary exists and is buildable, though.
+data BinaryTriplet = BinaryTriplet
   { _tripBinary :: BinaryName,
     _tripPackage :: PackageName,
     _tripPlatform :: Platform
@@ -91,7 +91,7 @@ server (ServerConfig programDB appDB) =
       Handler . withExceptT (\err -> err400 {errBody = BSL.pack err}) $ do
         let sys = fromMaybe X86_64_Linux msys
         pkg <- maybe (resolvePackageName programDB bin sys) pure mpkg
-        buildTriplet appDB (Triplet bin pkg sys)
+        buildTriplet appDB (BinaryTriplet bin pkg sys)
 
 -- | Check the Nix programs database for a package that provides the given binary
 -- If there is a candidate package with the same name as the binary, that package is given priority.
@@ -104,11 +104,11 @@ resolvePackageName (ProgramDB dbpath) bin sys = do
     [] -> throwError $ "No known package provides " <> unBinaryName bin <> " for " <> show sys <> ". Consider manually specifying the package."
     candidates -> pure $ if coerce bin `elem` candidates then coerce bin else minimum candidates
 
--- | 1. See if we know this triplet to be unbuildable
+-- | 1. See if we know this BinaryTriplet to be unbuildable
 --   2. If buildable, build it
 --   3. Bump the count
-buildTriplet :: ApplicationDB -> Triplet -> ExceptT String IO ByteString
-buildTriplet appDB trip@(Triplet bin pkg sys) = withApplicationDB appDB $ \conn -> do
+buildTriplet :: ApplicationDB -> BinaryTriplet -> ExceptT String IO ByteString
+buildTriplet appDB trip@(BinaryTriplet bin pkg sys) = withApplicationDB appDB $ \conn -> do
   errorFlags :: [Only Bool] <- liftIO $ query conn "SELECT error FROM binaries WHERE binary = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
   case errorFlags of
     [Only True] -> do
@@ -138,8 +138,8 @@ buildTriplet appDB trip@(Triplet bin pkg sys) = withApplicationDB appDB $ \conn 
     -- TODO is this the right way to do thread safety? or should we take more care on the application side?
     bump conn = liftIO $ execute conn "UPDATE binaries SET hits = hits + 1 WHERE binary = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
 
-nixBuild :: Triplet -> IO (Either String ByteString)
-nixBuild (Triplet bin pkg sys) = runExceptT $ do
+nixBuild :: BinaryTriplet -> IO (Either String ByteString)
+nixBuild (BinaryTriplet bin pkg sys) = runExceptT $ do
   -- TODO stream build process to stderr
   -- TODO make sure we can't get any XSS-like shenanigans
   (exit, stdout, stderr) <-
