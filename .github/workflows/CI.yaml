@@ -26,13 +26,12 @@ jobs:
         run: nix build -L '.#devShell.x86_64-linux'
 
   stack-build:
-    name: Stack ${{ matrix.resolver }} on ${{ matrix.os }}
+    name: Stack ${{ matrix.resolver }}
     strategy:
       fail-fast: false
       matrix:
         resolver: [ nightly, lts-19 ]
-        os: [ macos-latest, ubuntu-latest ]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - uses: haskell/actions/setup@v1
@@ -46,13 +45,12 @@ jobs:
       - run: stack build --resolver ${{ matrix.resolver }} --haddock --test --bench --no-run-benchmarks
 
   cabal-build:
-    name: Cabal with GHC ${{ matrix.ghc }} on ${{ matrix.os }}
+    name: Cabal with GHC ${{ matrix.ghc }}
     strategy:
       fail-fast: false
       matrix:
         ghc: [ '8.10.7', '9.2.2' ]
-        os: [ ubuntu-latest, macos-latest ]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - uses: haskell/actions/setup@v1
