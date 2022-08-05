@@ -1,0 +1,10 @@
+cradle:
+  multi:
+    # - path: "ignore/"
+    #   config: {cradle: {none: }}
+
+    - path: "src"
+      config: {cradle: {cabal: {component: "lib:binplz-server"}}}
+
+    - path: "app"
+      config: {cradle: {cabal: {component: "binplz-server:binplz-server"}}}
