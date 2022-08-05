@@ -33,8 +33,8 @@ import qualified System.Process as Proc
 --  TODO API documentation
 type API =
   Get '[JSON] NoContent
-    :<|> Capture "binary-name" BinaryName :> QueryParam "sys" System :> Get '[OctetStream] ByteString
-    :<|> Capture "package-name" PackageName :> Capture "binary-name" BinaryName :> QueryParam "sys" System :> Get '[OctetStream] ByteString
+    :<|> Capture "binary-name" BinaryName :> QueryParam "sys" Platform :> Get '[OctetStream] ByteString
+    :<|> Capture "package-name" PackageName :> Capture "binary-name" BinaryName :> QueryParam "sys" Platform :> Get '[OctetStream] ByteString
 
 newtype BinaryName = BinaryName {unBinaryName :: String}
   deriving newtype (ToField, FromHttpApiData)
@@ -42,20 +42,18 @@ newtype BinaryName = BinaryName {unBinaryName :: String}
 newtype PackageName = PackageName {unPackageName :: String}
   deriving newtype (Eq, Ord, FromField, FromHttpApiData, ToField)
 
--- TODO just make this a string?
--- TODO isn't this an architecture more than a system? nix calls it a system I guess
-data System
+data Platform
   = X86_64_Linux
   | AARCH_64_Linux
 
-instance Show System where
+instance Show Platform where
   show X86_64_Linux = "x86_64-linux"
   show AARCH_64_Linux = "aarch64-linux"
 
-instance FromHttpApiData System where
+instance FromHttpApiData Platform where
   parseQueryParam "aarch64" = pure AARCH_64_Linux
   parseQueryParam "x86_64-linux" = pure X86_64_Linux
-  parseQueryParam sys = Left $ "Unknown system architecture: " <> sys
+  parseQueryParam sys = Left $ "Unknown platform: " <> sys
 
 -- | A Triplet uniquely identifies a binary in nixpkgs.
 -- A Triplet is not a proof that that binary exists and is buildable, though.
@@ -63,7 +61,7 @@ instance FromHttpApiData System where
 data Triplet = Triplet
   { _tripName :: BinaryName,
     _tripPackage :: PackageName,
-    _tripSystem :: System
+    _tripPlatform :: Platform
   }
 
 newtype ApplicationDB = ApplicationDB FilePath
@@ -80,7 +78,7 @@ data ServerConfig = ServerConfig
 
 -- | Serve the API
 -- This is a matter of
---   1. Filling in missing package/system parameters to construct a proper 'Triplet'
+--   1. Filling in missing package/platform parameters to construct a proper 'Triplet'
 --   2. Building the triplet
 -- If an error occurs, this is returned as a 400
 server :: ServerConfig -> Server API
@@ -89,7 +87,7 @@ server (ServerConfig programDB appDB) =
     :<|> (\bin -> handle bin Nothing)
     :<|> (\pkg bin -> handle bin (Just pkg))
   where
-    handle :: BinaryName -> Maybe PackageName -> Maybe System -> Handler ByteString
+    handle :: BinaryName -> Maybe PackageName -> Maybe Platform -> Handler ByteString
     handle bin mpkg msys =
       Handler . withExceptT (\err -> err400 {errBody = BSL.pack err}) $ do
         let sys = fromMaybe X86_64_Linux msys
@@ -99,10 +97,10 @@ server (ServerConfig programDB appDB) =
 -- | Check the Nix programs database for a package that provides the given binary
 -- If there is a candidate package with the same name as the binary, that package is given priority.
 -- If not, the alphabetically first package is chosen.
-resolvePackageName :: ProgramDB -> BinaryName -> System -> ExceptT String IO PackageName
+resolvePackageName :: ProgramDB -> BinaryName -> Platform -> ExceptT String IO PackageName
 resolvePackageName (ProgramDB dbpath) bin sys = do
   pkgs <- liftIO . withConnection dbpath $ \conn ->
-    query conn "SELECT package FROM programs WHERE name = ? AND system = ?" (bin, show sys)
+    query conn "SELECT package FROM programs WHERE name = ? AND platform = ?" (bin, show sys)
   case fmap fromOnly pkgs of
     [] -> throwError $ "No known package provides " <> unBinaryName bin <> " for " <> show sys <> ". Consider manually specifying the package."
     candidates -> pure $ if coerce bin `elem` candidates then coerce bin else minimum candidates
@@ -112,7 +110,7 @@ resolvePackageName (ProgramDB dbpath) bin sys = do
 --   3. Bump the count
 buildTriplet :: ApplicationDB -> Triplet -> ExceptT String IO ByteString
 buildTriplet appDB trip@(Triplet bin pkg sys) = withApplicationDB appDB $ \conn -> do
-  errorFlags :: [Only Bool] <- liftIO $ query conn "SELECT error FROM binaries WHERE name = ? AND package = ? AND system = ?" (bin, pkg, show sys)
+  errorFlags :: [Only Bool] <- liftIO $ query conn "SELECT error FROM binaries WHERE name = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
   case errorFlags of
     [Only True] -> do
       bump conn
@@ -127,7 +125,7 @@ buildTriplet appDB trip@(Triplet bin pkg sys) = withApplicationDB appDB $ \conn 
       liftIO $
         execute
           conn
-          "INSERT INTO binaries (name, package, system, hits, error) VALUES (?,?,?,?,?)"
+          "INSERT INTO binaries (name, package, platform, hits, error) VALUES (?,?,?,?,?)"
           (bin, pkg, show sys, 1 :: Int, isLeft res)
       ExceptT $ pure res -- equiv to either throwError pure
     [Only False] -> do
@@ -139,7 +137,7 @@ buildTriplet appDB trip@(Triplet bin pkg sys) = withApplicationDB appDB $ \conn 
     _ : _ : _ -> error "impossible"
   where
     -- TODO is this the right way to do thread safety? or should we take more care on the application side?
-    bump conn = liftIO $ execute conn "UPDATE binaries SET hits = hits + 1 WHERE name = ? AND package = ? AND system = ?" (bin, pkg, show sys)
+    bump conn = liftIO $ execute conn "UPDATE binaries SET hits = hits + 1 WHERE name = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
 
 nixBuild :: Triplet -> IO (Either String ByteString)
 nixBuild (Triplet bin pkg sys) = runExceptT $ do
@@ -177,10 +175,10 @@ withApplicationDB (ApplicationDB path) k = ExceptT $
       " CREATE TABLE IF NOT EXISTS binaries \
       \ ( name     TEXT NOT NULL \
       \ , package  TEXT NOT NULL \
-      \ , system   TEXT NOT NULL \
+      \ , platform   TEXT NOT NULL \
       \ , hits     INTEGER NOT NULL \
       \ , error    BOOLEAN NOT NULL \
-      \ , PRIMARY KEY (name, package, system) )"
+      \ , PRIMARY KEY (name, package, platform) )"
     runExceptT (k conn)
 
 -- TODO multithreading
