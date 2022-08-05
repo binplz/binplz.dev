@@ -57,9 +57,8 @@ instance FromHttpApiData Platform where
 
 -- | A Triplet uniquely identifies a binary in nixpkgs.
 -- A Triplet is not a proof that that binary exists and is buildable, though.
--- TODO better name for this than triplet?
 data Triplet = Triplet
-  { _tripName :: BinaryName,
+  { _tripBinary :: BinaryName,
     _tripPackage :: PackageName,
     _tripPlatform :: Platform
   }
@@ -100,7 +99,7 @@ server (ServerConfig programDB appDB) =
 resolvePackageName :: ProgramDB -> BinaryName -> Platform -> ExceptT String IO PackageName
 resolvePackageName (ProgramDB dbpath) bin sys = do
   pkgs <- liftIO . withConnection dbpath $ \conn ->
-    query conn "SELECT package FROM programs WHERE name = ? AND platform = ?" (bin, show sys)
+    query conn "SELECT package FROM programs WHERE binary = ? AND platform = ?" (bin, show sys)
   case fmap fromOnly pkgs of
     [] -> throwError $ "No known package provides " <> unBinaryName bin <> " for " <> show sys <> ". Consider manually specifying the package."
     candidates -> pure $ if coerce bin `elem` candidates then coerce bin else minimum candidates
@@ -110,7 +109,7 @@ resolvePackageName (ProgramDB dbpath) bin sys = do
 --   3. Bump the count
 buildTriplet :: ApplicationDB -> Triplet -> ExceptT String IO ByteString
 buildTriplet appDB trip@(Triplet bin pkg sys) = withApplicationDB appDB $ \conn -> do
-  errorFlags :: [Only Bool] <- liftIO $ query conn "SELECT error FROM binaries WHERE name = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
+  errorFlags :: [Only Bool] <- liftIO $ query conn "SELECT error FROM binaries WHERE binary = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
   case errorFlags of
     [Only True] -> do
       bump conn
@@ -125,7 +124,7 @@ buildTriplet appDB trip@(Triplet bin pkg sys) = withApplicationDB appDB $ \conn 
       liftIO $
         execute
           conn
-          "INSERT INTO binaries (name, package, platform, hits, error) VALUES (?,?,?,?,?)"
+          "INSERT INTO binaries (binary, package, platform, hits, error) VALUES (?,?,?,?,?)"
           (bin, pkg, show sys, 1 :: Int, isLeft res)
       ExceptT $ pure res -- equiv to either throwError pure
     [Only False] -> do
@@ -137,7 +136,7 @@ buildTriplet appDB trip@(Triplet bin pkg sys) = withApplicationDB appDB $ \conn 
     _ : _ : _ -> error "impossible"
   where
     -- TODO is this the right way to do thread safety? or should we take more care on the application side?
-    bump conn = liftIO $ execute conn "UPDATE binaries SET hits = hits + 1 WHERE name = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
+    bump conn = liftIO $ execute conn "UPDATE binaries SET hits = hits + 1 WHERE binary = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
 
 nixBuild :: Triplet -> IO (Either String ByteString)
 nixBuild (Triplet bin pkg sys) = runExceptT $ do
@@ -164,7 +163,6 @@ nixBuild (Triplet bin pkg sys) = runExceptT $ do
   where
     packageString = showString "nixpkgs#legacyPackages." . shows sys . showString ".pkgsStatic." . showString (unPackageName pkg)
 
--- TODO what's a good name for this db?
 -- TODO rename name field to binary
 -- TODO maybe we should save (and even index by) store path?
 withApplicationDB :: ApplicationDB -> (Connection -> ExceptT e IO a) -> ExceptT e IO a
@@ -173,12 +171,12 @@ withApplicationDB (ApplicationDB path) k = ExceptT $
     execute_
       conn
       " CREATE TABLE IF NOT EXISTS binaries \
-      \ ( name     TEXT NOT NULL \
+      \ ( binary   TEXT NOT NULL \
       \ , package  TEXT NOT NULL \
       \ , platform   TEXT NOT NULL \
       \ , hits     INTEGER NOT NULL \
       \ , error    BOOLEAN NOT NULL \
-      \ , PRIMARY KEY (name, package, platform) )"
+      \ , PRIMARY KEY (binary, package, platform) )"
     runExceptT (k conn)
 
 -- TODO multithreading
