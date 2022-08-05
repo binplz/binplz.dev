@@ -51,7 +51,7 @@ instance Show Platform where
   show AARCH_64_Linux = "aarch64-linux"
 
 instance FromHttpApiData Platform where
-  parseQueryParam "aarch64" = pure AARCH_64_Linux
+  parseQueryParam "aarch64-linux" = pure AARCH_64_Linux
   parseQueryParam "x86_64-linux" = pure X86_64_Linux
   parseQueryParam sys = Left $ "Unknown platform: " <> sys
 
