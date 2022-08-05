@@ -42,7 +42,7 @@ jobs:
       - run: stack init --resolver ${{ matrix.resolver }}
       - run: stack build --resolver ${{ matrix.resolver }} --only-dependencies
       - run: stack build --resolver ${{ matrix.resolver }}
-      - run: stack build --resolver ${{ matrix.resolver }} --haddock --test --bench --no-run-benchmarks
+      - run: stack build --resolver ${{ matrix.resolver }} --haddock
 
   cabal-build:
     name: Cabal with GHC ${{ matrix.ghc }}
@@ -64,4 +64,3 @@ jobs:
           key: cabal-cache-${{ matrix.os }}-${{ matrix.ghc }}-${{ hashFiles('**/*.cabal') }}
       - run: cabal build all --only-dependencies
       - run: cabal build all
-      - run: cabal test  all --test-show-details=direct

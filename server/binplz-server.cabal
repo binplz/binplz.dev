@@ -24,12 +24,11 @@ extra-doc-files:
 common common-options
   build-depends:
     , aeson
-    , base                >=4.9 && <5
+    , base            >=4.9 && <5
     , bytestring
     , containers
     , directory
     , filepath
-    , neat-interpolation
     , process
     , servant-server
     , sqlite-simple
