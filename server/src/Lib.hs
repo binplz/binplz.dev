@@ -102,7 +102,7 @@ redirectToDocs = throwError err301 { errHeaders = [("Location", "https://docs.bi
 resolvePackageName :: ProgramDB -> BinaryName -> Platform -> ExceptT String IO PackageName
 resolvePackageName (ProgramDB dbpath) bin sys = do
   pkgs <- liftIO . withConnection dbpath $ \conn ->
-    query conn "SELECT package FROM programs WHERE name = ? AND package = ?" (bin, show sys)
+    query conn "SELECT package FROM programs WHERE name = ? AND system = ?" (bin, show sys)
   case fmap fromOnly pkgs of
     [] -> throwError $ "No known package provides " <> unBinaryName bin <> " for " <> show sys <> ". Consider manually specifying the package."
     candidates -> pure $ if coerce bin `elem` candidates then coerce bin else minimum candidates
