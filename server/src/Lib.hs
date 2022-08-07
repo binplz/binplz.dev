@@ -32,7 +32,7 @@ import qualified System.Process as Proc
 --   localhost:8081/procps/ps?sys=aarch64-linux
 --  TODO API documentation
 type API =
-  Get '[JSON] NoContent
+  Get '[PlainText] NoContent
     :<|> Capture "binary-name" BinaryName :> QueryParam "sys" Platform :> Get '[OctetStream] ByteString
     :<|> Capture "package-name" PackageName :> Capture "binary-name" BinaryName :> QueryParam "sys" Platform :> Get '[OctetStream] ByteString
 
@@ -82,7 +82,7 @@ data ServerConfig = ServerConfig
 -- If an error occurs, this is returned as a 400
 server :: ServerConfig -> Server API
 server (ServerConfig programDB appDB) =
-  pure NoContent
+  redirectToDocs
     :<|> (\bin -> handle bin Nothing)
     :<|> (\pkg bin -> handle bin (Just pkg))
   where
@@ -92,6 +92,9 @@ server (ServerConfig programDB appDB) =
         let sys = fromMaybe X86_64_Linux msys
         pkg <- maybe (resolvePackageName programDB bin sys) pure mpkg
         buildTriplet appDB (BinaryTriplet bin pkg sys)
+
+redirectToDocs :: forall a. Handler a
+redirectToDocs = throwError err301 { errHeaders = [("Location", "https://docs.binplz.dev")] }
 
 -- | Check the Nix programs database for a package that provides the given binary
 -- If there is a candidate package with the same name as the binary, that package is given priority.
