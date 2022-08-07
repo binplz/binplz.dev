@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -10,15 +11,19 @@ module Lib (app) where
 
 import Control.Monad
 import Control.Monad.IO.Class
-import Control.Monad.Trans.Except (ExceptT (..), runExceptT, withExceptT)
+import Control.Monad.Trans.Except (runExceptT)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import Data.Coerce (coerce)
-import Data.Either (isLeft)
 import Data.Maybe (fromMaybe)
-import Database.SQLite.Simple
-import Database.SQLite.Simple.FromField (FromField (..))
+import Data.Text (Text)
+import qualified Data.Text as Text
+import Data.Void (absurd)
+import Database.SQLite.Simple (Only (..), SQLData (..))
+import qualified Database.SQLite.Simple as SQL
+import Database.SQLite.Simple.FromField (FromField)
+import qualified Database.SQLite.Simple.FromField as SQL
 import Database.SQLite.Simple.ToField (ToField (..))
 import GHC.IO.Exception (ExitCode (ExitSuccess))
 import Network.Wai.Handler.Warp (run)
@@ -55,6 +60,10 @@ instance FromHttpApiData Platform where
   parseQueryParam "x86_64-linux" = pure X86_64_Linux
   parseQueryParam sys = Left $ "Unknown platform: " <> sys
 
+instance ToField Platform where
+  toField X86_64_Linux = SQLText "x86_64-linux"
+  toField AARCH_64_Linux = SQLText "aarch64-linux"
+
 -- | A BinaryTriplet uniquely identifies a binary in nixpkgs.
 -- A BinaryTriplet is not a proof that that binary exists and is buildable, though.
 data BinaryTriplet = BinaryTriplet
@@ -66,6 +75,23 @@ data BinaryTriplet = BinaryTriplet
 newtype ApplicationDB = ApplicationDB FilePath
 
 newtype ProgramDB = ProgramDB FilePath
+
+data BuildResult
+  = BuildSuccess FilePath
+  | BuildFailure
+  | NoSuchBinary
+
+instance FromField BuildResult where
+  fromField field = case SQL.fieldData field of
+    SQLText "FAILURE" -> pure BuildFailure
+    SQLText "NO_SUCH_BINARY" -> pure NoSuchBinary
+    SQLText path -> pure $ BuildSuccess (Text.unpack path)
+    _ -> SQL.returnError SQL.Incompatible field "Field was not a StorePath"
+
+instance ToField BuildResult where
+  toField (BuildSuccess fp) = SQLText (Text.pack fp)
+  toField BuildFailure = SQLText "FAILURE"
+  toField NoSuchBinary = SQLText "NO_SUCH_BINARY"
 
 -- TODO make address/port configurable
 -- TODO read config parameters from the command line
@@ -79,7 +105,6 @@ data ServerConfig = ServerConfig
 -- This is a matter of
 --   1. Filling in missing package/platform parameters to construct a proper 'Triplet'
 --   2. Building the triplet
--- If an error occurs, this is returned as a 400
 server :: ServerConfig -> Server API
 server (ServerConfig programDB appDB) =
   pure NoContent
@@ -87,109 +112,99 @@ server (ServerConfig programDB appDB) =
     :<|> (\pkg bin -> handle bin (Just pkg))
   where
     handle :: BinaryName -> Maybe PackageName -> Maybe Platform -> Handler ByteString
-    handle bin mpkg msys =
-      Handler . withExceptT (\err -> err400 {errBody = BSL.pack err}) $ do
-        let sys = fromMaybe X86_64_Linux msys
-        pkg <- maybe (resolvePackageName programDB bin sys) pure mpkg
-        buildTriplet appDB (BinaryTriplet bin pkg sys)
+    handle bin mpkg msys = do
+      let sys = fromMaybe X86_64_Linux msys
+      pkg <- case mpkg of
+        Just pkg -> pure pkg
+        Nothing ->
+          liftIO (resolvePackageName programDB bin sys) >>= \case
+            Nothing -> throwError $ err404 {errBody = BSL.pack $ "No known package provides " <> unBinaryName bin <> " for " <> show sys <> ". Consider manually specifying the package."}
+            Just pkg -> pure pkg
+      result <- liftIO $ buildTriplet appDB (BinaryTriplet bin pkg sys)
+      case result of
+        BuildSuccess fp -> liftIO $ BS.readFile fp
+        BuildFailure -> throwError $ err400 {errBody = BSL.pack $ unPackageName pkg <> "-" <> show sys <> " failed to build. Detailed build information can be found on the website."}
+        NoSuchBinary -> throwError $ err404 {errBody = BSL.pack $ unPackageName pkg <> "-" <> show sys <> " did not produce the expected binary."}
 
 -- | Check the Nix programs database for a package that provides the given binary
 -- If there is a candidate package with the same name as the binary, that package is given priority.
 -- If not, the alphabetically first package is chosen.
-resolvePackageName :: ProgramDB -> BinaryName -> Platform -> ExceptT String IO PackageName
+resolvePackageName :: ProgramDB -> BinaryName -> Platform -> IO (Maybe PackageName)
 resolvePackageName (ProgramDB dbpath) bin sys = do
-  pkgs <- liftIO . withConnection dbpath $ \conn ->
-    query conn "SELECT package FROM programs WHERE name = ? AND package = ?" (bin, show sys)
-  case fmap fromOnly pkgs of
-    [] -> throwError $ "No known package provides " <> unBinaryName bin <> " for " <> show sys <> ". Consider manually specifying the package."
-    candidates -> pure $ if coerce bin `elem` candidates then coerce bin else minimum candidates
+  pkgs <- liftIO . SQL.withConnection dbpath $ \conn ->
+    SQL.query conn "SELECT package FROM programs WHERE name = ? AND system = ?" (bin, sys)
+  pure $ case fromOnly <$> pkgs of
+    [] -> Nothing -- throwError $ "No known package provides " <> unBinaryName bin <> " for " <> show sys <> ". Consider manually specifying the package."
+    candidates -> Just $ if coerce bin `elem` candidates then coerce bin else minimum candidates
 
--- | 1. See if we know this BinaryTriplet to be unbuildable
---   2. If buildable, build it
---   3. Bump the count
-buildTriplet :: ApplicationDB -> BinaryTriplet -> ExceptT String IO ByteString
+buildTriplet :: ApplicationDB -> BinaryTriplet -> IO BuildResult
 buildTriplet appDB trip@(BinaryTriplet bin pkg sys) = withApplicationDB appDB $ \conn -> do
-  errorFlags :: [Only Bool] <- liftIO $ query conn "SELECT error FROM binaries WHERE binary = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
+  errorFlags :: [Only BuildResult] <- SQL.query conn "SELECT result FROM binaries WHERE binary = ? AND package = ? AND platform = ?" (bin, pkg, sys)
   case errorFlags of
-    [Only True] -> do
-      bump conn
-      -- TODO
-      -- Right now, upon a cached failure, we can't tell the user any more than this.
-      -- Maybe we should store some more information about where the error came from, or a part of the nix log?
-      throwError "Known failure"
+    [Only result] -> do
+      SQL.execute conn "UPDATE binaries SET hits = hits + 1 WHERE binary = ? AND package = ? AND platform = ?" (bin, pkg, sys)
+      pure result
     [] -> do
       -- TODO thread safety issue: we have an unguarded insert with a primary key, this throws an exception if in the meantime someone else makes the same request
-      -- TODO maybe just use an atomic SQL transaction is enough?
-      res <- liftIO $ nixBuild trip
-      liftIO $
-        execute
-          conn
-          "INSERT INTO binaries (binary, package, platform, hits, error) VALUES (?,?,?,?,?)"
-          (bin, pkg, show sys, 1 :: Int, isLeft res)
-      ExceptT $ pure res -- equiv to either throwError pure
-    [Only False] -> do
-      -- TODO Don't invoke nix?
-      res <- liftIO $ nixBuild trip
-      case res of
-        Left _ -> error "what to do" -- TODO
-        Right bs -> bs <$ bump conn
-    _ : _ : _ -> error "impossible"
-  where
-    -- TODO is this the right way to do thread safety? or should we take more care on the application side?
-    bump conn = liftIO $ execute conn "UPDATE binaries SET hits = hits + 1 WHERE binary = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
+      (buildLog, result) <- nixBuild trip
+      SQL.execute conn "INSERT INTO binaries (binary, package, platform, hits, result, build_log) VALUES (?,?,?,?,?,?)" (bin, pkg, sys, 1 :: Int, result, buildLog)
+      pure result
+    _ : _ : _ -> error "impossible" -- TODO throw error 500
 
-nixBuild :: BinaryTriplet -> IO (Either String ByteString)
-nixBuild (BinaryTriplet bin pkg sys) = runExceptT $ do
+nixBuild :: BinaryTriplet -> IO (Text, BuildResult)
+nixBuild (BinaryTriplet bin pkg sys) = do
   -- TODO stream build process to stderr
   -- TODO make sure we can't get any XSS-like shenanigans
   (exit, stdout, stderr) <-
-    liftIO $
-      Proc.readProcessWithExitCode
-        "nix"
-        ( ["build", "nixpkgs#legacyPackages." <> show sys <> ".pkgsStatic." <> unPackageName pkg]
-            -- Don't make a result symlink, just print it to stdout
-            <> ["--no-link", "--print-out-paths"]
-            -- Only allow access to files from NIX_PATH. Derivations can't read files like `/etc/shadow`.
-            <> ["--option", "restrict-eval", "true"]
-            -- Disallow IFD.  Probably not necessary, since Nixpkgs doesn't contain derivations that do IFD, but better to be on the safe side.
-            <> ["--option", "allow-import-from-derivation", "false"]
-            -- Make sure the sandbox is always used.
-            <> ["--option", "sandbox-fallback", "false"]
-        )
-        ""
-  liftIO . putStrLn $
+    Proc.readProcessWithExitCode
+      "nix"
+      ( ["build", "nixpkgs#legacyPackages." <> show sys <> ".pkgsStatic." <> unPackageName pkg]
+          -- Don't make a result symlink, just print it to stdout
+          <> ["--no-link", "--print-out-paths"]
+          -- Only allow access to files from NIX_PATH. Derivations can't read files like `/etc/shadow`.
+          <> ["--option", "restrict-eval", "true"]
+          -- Disallow IFD.  Probably not necessary, since Nixpkgs doesn't contain derivations that do IFD, but better to be on the safe side.
+          <> ["--option", "allow-import-from-derivation", "false"]
+          -- Make sure the sandbox is always used.
+          <> ["--option", "sandbox-fallback", "false"]
+      )
+      ""
+  putStrLn $
     unlines
       [ "Finished a Nix build call",
         "Exit code: " <> show exit,
         "stdout: " <> stdout,
         "stderr: " <> stderr
       ]
-  case (exit, lines stdout) of
-    (ExitSuccess, [result]) -> do
-      let fullPath = result </> "bin" </> unBinaryName bin
-      liftIO . putStrLn $ "Successfully built " <> fullPath
-      fileExists <- liftIO $ Dir.doesFileExist fullPath
-      unless fileExists $ throwError "Package did not produce expected binary"
-      isExecutable <- liftIO $ Dir.executable <$> Dir.getPermissions fullPath
-      unless isExecutable $ throwError "Binary specified by the triplet was not an executable"
-      liftIO $ BS.readFile fullPath
-    _ -> throwError $ unlines ["An error occurred.", "  Exit code: " <> show exit, "  error:" <> stderr]
+  result <- runExceptT $ do
+    unless (exit == ExitSuccess) $ throwError BuildFailure
+    result <- case lines stdout of
+      [result] -> pure result
+      _ -> throwError NoSuchBinary -- TODO
+    let fullPath = result </> "bin" </> unBinaryName bin
+    fileExists <- liftIO $ Dir.doesFileExist fullPath
+    unless fileExists $ throwError NoSuchBinary
+    isExecutable <- liftIO $ Dir.executable <$> Dir.getPermissions fullPath
+    unless isExecutable $ throwError NoSuchBinary
+    throwError (BuildSuccess fullPath)
+  pure (Text.pack stderr, either id absurd result)
 
 -- TODO rename name field to binary
 -- TODO maybe we should save (and even index by) store path?
-withApplicationDB :: ApplicationDB -> (Connection -> ExceptT e IO a) -> ExceptT e IO a
-withApplicationDB (ApplicationDB path) k = ExceptT $
-  withConnection path $ \conn -> do
-    execute_
+withApplicationDB :: ApplicationDB -> (SQL.Connection -> IO a) -> IO a
+withApplicationDB (ApplicationDB path) k =
+  SQL.withConnection path $ \conn -> do
+    SQL.execute_
       conn
       " CREATE TABLE IF NOT EXISTS binaries \
-      \ ( binary   TEXT NOT NULL \
-      \ , package  TEXT NOT NULL \
-      \ , platform   TEXT NOT NULL \
-      \ , hits     INTEGER NOT NULL \
-      \ , error    BOOLEAN NOT NULL \
+      \ ( binary     TEXT     NOT NULL \
+      \ , package    TEXT     NOT NULL \
+      \ , platform   TEXT     NOT NULL \
+      \ , hits       INTEGER  NOT NULL \
+      \ , result     TEXT     NOT NULL \
+      \ , build_log  TEXT     NOT NULL \
       \ , PRIMARY KEY (binary, package, platform) )"
-    runExceptT (k conn)
+    k conn
 
 -- TODO multithreading
 app :: IO ()
