@@ -21,7 +21,7 @@ import Database.SQLite.Simple
 import Database.SQLite.Simple.FromField (FromField (..))
 import Database.SQLite.Simple.ToField (ToField (..))
 import GHC.IO.Exception (ExitCode (ExitSuccess))
-import Network.Wai.Handler.Warp (run)
+import Network.Wai.Handler.Warp (Port, run)
 import Servant
 import qualified System.Directory as Dir
 import System.Environment (lookupEnv)
@@ -74,7 +74,8 @@ newtype ProgramDB = ProgramDB FilePath
 -- TODO Make nix sources configurable?
 data ServerConfig = ServerConfig
   { _programDB :: ProgramDB,
-    _binaryDB :: ApplicationDB
+    _binaryDB :: ApplicationDB,
+    _port :: Port
   }
 
 -- | Serve the API
@@ -83,7 +84,7 @@ data ServerConfig = ServerConfig
 --   2. Building the triplet
 -- If an error occurs, this is returned as a 400
 server :: ServerConfig -> Server API
-server (ServerConfig programDB appDB) =
+server (ServerConfig programDB appDB _) =
   redirectToDocs
     :<|> (\bin -> handle bin Nothing)
     :<|> (\pkg bin -> handle bin (Just pkg))
@@ -96,7 +97,7 @@ server (ServerConfig programDB appDB) =
         buildTriplet appDB (BinaryTriplet bin pkg sys)
 
 redirectToDocs :: forall a. Handler a
-redirectToDocs = throwError err301 { errHeaders = [("Location", "https://docs.binplz.dev")] }
+redirectToDocs = throwError err301 {errHeaders = [("Location", "https://docs.binplz.dev")]}
 
 -- | Check the Nix programs database for a package that provides the given binary
 -- If there is a candidate package with the same name as the binary, that package is given priority.
@@ -196,11 +197,21 @@ withApplicationDB (ApplicationDB path) k = ExceptT $
       \ , PRIMARY KEY (binary, package, platform) )"
     runExceptT (k conn)
 
--- TODO multithreading
-app :: IO ()
-app = do
+setupConfig :: IO ServerConfig
+setupConfig = do
   port <- lookupEnv "PORT"
-  run (fromMaybe 8081 $ readMaybe =<< port) (serve (Proxy @API) (server (ServerConfig progs bins)))
+  pure $
+    ServerConfig
+      { _programDB = progs,
+        _binaryDB = bins,
+        _port = fromMaybe 8081 $ readMaybe =<< port
+      }
   where
     bins = ApplicationDB "appdb.sqlite"
     progs = ProgramDB "/nix/var/nix/profiles/per-user/root/channels/nixos/programs.sqlite"
+
+-- TODO multithreading
+app :: IO ()
+app = do
+  config <- setupConfig
+  run (_port config) (serve (Proxy @API) (server config))
