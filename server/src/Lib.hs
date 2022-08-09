@@ -24,8 +24,10 @@ import GHC.IO.Exception (ExitCode (ExitSuccess))
 import Network.Wai.Handler.Warp (run)
 import Servant
 import qualified System.Directory as Dir
+import System.Environment (lookupEnv)
 import System.FilePath ((</>))
 import qualified System.Process as Proc
+import Text.Read (readMaybe)
 
 -- | Top-level API. Examples:
 --   localhost:8081/ps
@@ -196,7 +198,9 @@ withApplicationDB (ApplicationDB path) k = ExceptT $
 
 -- TODO multithreading
 app :: IO ()
-app = run 8081 (serve (Proxy @API) (server (ServerConfig progs bins)))
+app = do
+  port <- lookupEnv "PORT"
+  run (fromMaybe 8081 $ readMaybe =<< port) (serve (Proxy @API) (server (ServerConfig progs bins)))
   where
     bins = ApplicationDB "appdb.sqlite"
     progs = ProgramDB "/nix/var/nix/profiles/per-user/root/channels/nixos/programs.sqlite"
