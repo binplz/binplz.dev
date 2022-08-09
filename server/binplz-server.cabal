@@ -24,11 +24,12 @@ extra-doc-files:
 common common-options
   build-depends:
     , aeson
-    , base            >=4.9 && <5
+    , base                  >=4.9 && <5
     , bytestring
     , containers
     , directory
     , filepath
+    , optparse-applicative
     , process
     , servant-server
     , sqlite-simple
@@ -45,7 +46,10 @@ common common-options
 library
   import:          common-options
   hs-source-dirs:  src
-  exposed-modules: Lib
+  exposed-modules:
+    Lib
+    Options
+
   build-depends:
 
 executable binplz-server

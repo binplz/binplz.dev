@@ -6,7 +6,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Lib (app) where
+module Lib (ServerConfig (..), ProgramDB (..), ApplicationDB (..), mainWithConfig) where
 
 import Control.Monad
 import Control.Monad.IO.Class
@@ -24,10 +24,8 @@ import GHC.IO.Exception (ExitCode (ExitSuccess))
 import Network.Wai.Handler.Warp (Port, run)
 import Servant
 import qualified System.Directory as Dir
-import System.Environment (lookupEnv)
 import System.FilePath ((</>))
 import qualified System.Process as Proc
-import Text.Read (readMaybe)
 
 -- | Top-level API. Examples:
 --   localhost:8081/ps
@@ -65,9 +63,9 @@ data BinaryTriplet = BinaryTriplet
     _tripPlatform :: Platform
   }
 
-newtype ApplicationDB = ApplicationDB FilePath
+newtype ApplicationDB = ApplicationDB {unApplicationDB :: FilePath}
 
-newtype ProgramDB = ProgramDB FilePath
+newtype ProgramDB = ProgramDB {unProgramDB :: FilePath}
 
 -- TODO make address/port configurable
 -- TODO read config parameters from the command line
@@ -197,25 +195,6 @@ withApplicationDB (ApplicationDB path) k = ExceptT $
       \ , PRIMARY KEY (binary, package, platform) )"
     runExceptT (k conn)
 
-setupConfig :: IO ServerConfig
-setupConfig = do
-  applicationDb <- lookupEnv "BINPLZ_APPLICATION_DB"
-  programDb <- lookupEnv "BINPLZ_PROGRAM_DB"
-  port <- lookupEnv "PORT"
-  let applicationDb' = ApplicationDB $ fromMaybe "appdb.sqlite" applicationDb
-  let programDb' = ProgramDB $ fromMaybe "/nix/var/nix/profiles/per-user/root/channels/nixos/programs.sqlite" programDb
-  pure $
-    ServerConfig
-      { _programDB = programDb',
-        _applicationDB = applicationDb',
-        _port = fromMaybe 8081 $ readMaybe =<< port
-      }
-  where
-    bins = ApplicationDB "appdb.sqlite"
-    progs = ProgramDB "/nix/var/nix/profiles/per-user/root/channels/nixos/programs.sqlite"
-
 -- TODO multithreading
-app :: IO ()
-app = do
-  config <- setupConfig
-  run (_port config) (serve (Proxy @API) (server config))
+mainWithConfig :: ServerConfig -> IO ()
+mainWithConfig config = run (_port config) (serve (Proxy @API) (server config))
