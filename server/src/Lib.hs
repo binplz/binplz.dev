@@ -74,7 +74,7 @@ newtype ProgramDB = ProgramDB FilePath
 -- TODO Make nix sources configurable?
 data ServerConfig = ServerConfig
   { _programDB :: ProgramDB,
-    _binaryDB :: ApplicationDB,
+    _applicationDB :: ApplicationDB,
     _port :: Port
   }
 
@@ -191,7 +191,7 @@ withApplicationDB (ApplicationDB path) k = ExceptT $
       " CREATE TABLE IF NOT EXISTS binaries \
       \ ( binary   TEXT NOT NULL \
       \ , package  TEXT NOT NULL \
-      \ , platform   TEXT NOT NULL \
+      \ , platform TEXT NOT NULL \
       \ , hits     INTEGER NOT NULL \
       \ , error    BOOLEAN NOT NULL \
       \ , PRIMARY KEY (binary, package, platform) )"
@@ -199,11 +199,15 @@ withApplicationDB (ApplicationDB path) k = ExceptT $
 
 setupConfig :: IO ServerConfig
 setupConfig = do
+  applicationDb <- lookupEnv "BINPLZ_APPLICATION_DB"
+  programDb <- lookupEnv "BINPLZ_PROGRAM_DB"
   port <- lookupEnv "PORT"
+  let applicationDb' = ApplicationDB $ fromMaybe "appdb.sqlite" applicationDb
+  let programDb' = ProgramDB $ fromMaybe "/nix/var/nix/profiles/per-user/root/channels/nixos/programs.sqlite" programDb
   pure $
     ServerConfig
-      { _programDB = progs,
-        _binaryDB = bins,
+      { _programDB = programDb',
+        _applicationDB = applicationDb',
         _port = fromMaybe 8081 $ readMaybe =<< port
       }
   where
