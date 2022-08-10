@@ -6,7 +6,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Lib (app) where
+module Lib (ServerConfig (..), ProgramDB (..), ApplicationDB (..), mainWithConfig) where
 
 import Control.Monad
 import Control.Monad.IO.Class
@@ -21,7 +21,7 @@ import Database.SQLite.Simple
 import Database.SQLite.Simple.FromField (FromField (..))
 import Database.SQLite.Simple.ToField (ToField (..))
 import GHC.IO.Exception (ExitCode (ExitSuccess))
-import Network.Wai.Handler.Warp (run)
+import Network.Wai.Handler.Warp (Port, run)
 import Servant
 import qualified System.Directory as Dir
 import System.FilePath ((</>))
@@ -63,16 +63,17 @@ data BinaryTriplet = BinaryTriplet
     _tripPlatform :: Platform
   }
 
-newtype ApplicationDB = ApplicationDB FilePath
+newtype ApplicationDB = ApplicationDB {unApplicationDB :: FilePath}
 
-newtype ProgramDB = ProgramDB FilePath
+newtype ProgramDB = ProgramDB {unProgramDB :: FilePath}
 
 -- TODO make address/port configurable
 -- TODO read config parameters from the command line
 -- TODO Make nix sources configurable?
 data ServerConfig = ServerConfig
   { _programDB :: ProgramDB,
-    _binaryDB :: ApplicationDB
+    _applicationDB :: ApplicationDB,
+    _port :: Port
   }
 
 -- | Serve the API
@@ -81,7 +82,7 @@ data ServerConfig = ServerConfig
 --   2. Building the triplet
 -- If an error occurs, this is returned as a 400
 server :: ServerConfig -> Server API
-server (ServerConfig programDB appDB) =
+server (ServerConfig programDB appDB _) =
   redirectToDocs
     :<|> (\bin -> handle bin Nothing)
     :<|> (\pkg bin -> handle bin (Just pkg))
@@ -94,7 +95,7 @@ server (ServerConfig programDB appDB) =
         buildTriplet appDB (BinaryTriplet bin pkg sys)
 
 redirectToDocs :: forall a. Handler a
-redirectToDocs = throwError err301 { errHeaders = [("Location", "https://docs.binplz.dev")] }
+redirectToDocs = throwError err301 {errHeaders = [("Location", "https://docs.binplz.dev")]}
 
 -- | Check the Nix programs database for a package that provides the given binary
 -- If there is a candidate package with the same name as the binary, that package is given priority.
@@ -188,15 +189,12 @@ withApplicationDB (ApplicationDB path) k = ExceptT $
       " CREATE TABLE IF NOT EXISTS binaries \
       \ ( binary   TEXT NOT NULL \
       \ , package  TEXT NOT NULL \
-      \ , platform   TEXT NOT NULL \
+      \ , platform TEXT NOT NULL \
       \ , hits     INTEGER NOT NULL \
       \ , error    BOOLEAN NOT NULL \
       \ , PRIMARY KEY (binary, package, platform) )"
     runExceptT (k conn)
 
 -- TODO multithreading
-app :: IO ()
-app = run 8081 (serve (Proxy @API) (server (ServerConfig progs bins)))
-  where
-    bins = ApplicationDB "appdb.sqlite"
-    progs = ProgramDB "/nix/var/nix/profiles/per-user/root/channels/nixos/programs.sqlite"
+mainWithConfig :: ServerConfig -> IO ()
+mainWithConfig config = run (_port config) (serve (Proxy @API) (server config))
