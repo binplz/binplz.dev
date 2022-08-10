@@ -1,0 +1,56 @@
+# Simple workflow for deploying static content to GitHub Pages
+name: Deploy static content to Pages
+
+on:
+  # Runs on pushes targeting the default branch
+  push:
+    branches: ["master"]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+# Allow one concurrent deployment
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Setup Pages
+        uses: actions/configure-pages@v1
+      - uses: cachix/install-nix-action@v17
+      - name: Build documentation
+        run: nix build -L .#docs
+      - name: Make sure docs are writable
+        # See https://www.reddit.com/r/github/comments/wb7hw6/cryptic_error_when_deploying_to_pages_using/
+        # and the solution at
+        # https://github.com/danth/coricamu/blob/cd253a6940853ffc3da7c14c9311940f1d70e222/.github/workflows/pages.yml#L40
+        # for why this is necessary:
+        run: cp -r --dereference --no-preserve=mode,ownership result/ public/
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v1
+        with:
+          path: ./public/
+
+  deploy:
+    needs: build
+
+    # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v1
