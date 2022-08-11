@@ -15,6 +15,17 @@
         "type": "github"
       }
     },
+    "nixos-channel": {
+      "locked": {
+        "narHash": "sha256-YaglG8AuhQNyK/1wK6NzTFR1onDQplHI33ZpdXhC2Yo=",
+        "type": "tarball",
+        "url": "https://nixos.org/channels/nixos-22.05/nixexprs.tar.xz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://nixos.org/channels/nixos-22.05/nixexprs.tar.xz"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1659656350,
@@ -34,6 +45,7 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
+        "nixos-channel": "nixos-channel",
         "nixpkgs": "nixpkgs"
       }
     }
