@@ -3,6 +3,7 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/release-22.05";
   inputs.flake-utils.url = "github:numtide/flake-utils";
+  inputs.nixos-channel.url = "https://nixos.org/channels/nixos-22.05/nixexprs.tar.xz";
 
   outputs = inputs:
     let
@@ -34,6 +35,7 @@
               pkgs.rlwrap
               pkgs.sqlite
             ];
+            BINPLZ_NIX_PROGRAM_DB = "${inputs.nixos-channel}/programs.sqlite";
           };
           defaultPackage = pkgs.binplz-server;
           packages = {
