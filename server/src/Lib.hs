@@ -37,10 +37,10 @@ type API =
     :<|> Capture "package-name" PackageName :> Capture "binary-name" BinaryName :> QueryParam "sys" Platform :> Get '[OctetStream] ByteString
 
 newtype BinaryName = BinaryName {unBinaryName :: String}
-  deriving newtype (ToField, FromHttpApiData)
+  deriving newtype (Show, ToField, FromHttpApiData)
 
 newtype PackageName = PackageName {unPackageName :: String}
-  deriving newtype (Eq, Ord, FromField, FromHttpApiData, ToField)
+  deriving newtype (Eq, Show, Ord, FromField, FromHttpApiData, ToField)
 
 data Platform
   = X86_64_Linux
@@ -62,10 +62,13 @@ data BinaryTriplet = BinaryTriplet
     _tripPackage :: PackageName,
     _tripPlatform :: Platform
   }
+  deriving (Show)
 
 newtype ApplicationDB = ApplicationDB {unApplicationDB :: FilePath}
+  deriving newtype (Show)
 
 newtype ProgramDB = ProgramDB {unProgramDB :: FilePath}
+  deriving newtype (Show)
 
 -- TODO make address/port configurable
 -- TODO read config parameters from the command line
@@ -75,6 +78,7 @@ data ServerConfig = ServerConfig
     _applicationDB :: ApplicationDB,
     _port :: Port
   }
+  deriving (Show)
 
 -- | Serve the API
 -- This is a matter of
@@ -113,6 +117,7 @@ resolvePackageName (ProgramDB dbpath) bin sys = do
 --   3. Bump the count
 buildTriplet :: ApplicationDB -> BinaryTriplet -> ExceptT String IO ByteString
 buildTriplet appDB trip@(BinaryTriplet bin pkg sys) = withApplicationDB appDB $ \conn -> do
+  liftIO . putStrLn $ "Building " <> show trip
   errorFlags :: [Only Bool] <- liftIO $ query conn "SELECT error FROM binaries WHERE binary = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
   case errorFlags of
     [Only True] -> do
@@ -197,4 +202,7 @@ withApplicationDB (ApplicationDB path) k = ExceptT $
 
 -- TODO multithreading
 mainWithConfig :: ServerConfig -> IO ()
-mainWithConfig config = run (_port config) (serve (Proxy @API) (server config))
+mainWithConfig config = do
+  putStrLn "Starting binplz-server with config:"
+  print config
+  run (_port config) (serve (Proxy @API) (server config))
