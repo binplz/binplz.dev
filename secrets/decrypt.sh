@@ -9,8 +9,8 @@ plaintext_dir="$secrets_root/plaintext"
 [ -d "$encrypted_dir" ]
 
 mkdir -p $plaintext_dir
-rm $plaintext_dir/*
+rm -f $plaintext_dir/*
 
 for file in $(cd $encrypted_dir && find -type f); do
-  age --decrypt -o "$plaintext_dir/$file" "$encrypted_dir/$file"
+  age --decrypt $@ -o "$plaintext_dir/$file" "$encrypted_dir/$file"
 done
