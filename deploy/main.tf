@@ -21,6 +21,7 @@ resource "aws_instance" "binplz_server" {
   vpc_security_group_ids      = [aws_security_group.my_security_group.id]
   user_data_replace_on_change = true
 
+  # We could also use a file provisioner here, but I've found that to be a bit more fragile since it requires SSH access.
   user_data = <<EOF
 #!/run/current-system/sw/bin/bash
 PATH=/run/current-system/sw/bin
@@ -34,7 +35,6 @@ output "server_ip_addr" {
 }
 
 resource "aws_security_group" "my_security_group" {
-  name = "my_security_group"
   ingress {
     from_port   = 0
     to_port     = 0
@@ -50,9 +50,6 @@ resource "aws_security_group" "my_security_group" {
 }
 
 resource "aws_ami" "binplz_ami" {
-  # By default, the AMI resource doesn't get invalidated when the image/snapshot changes.
-  # The hash in the name here makes it so that a new upstream image always triggers regenerating the AMI.
-  # We could probably also explicitly add a `depends_on` clause here instead.
   name                = var.binplz_image_name_hash
   virtualization_type = "hvm"
   root_device_name    = "/dev/xvda"
@@ -63,9 +60,7 @@ resource "aws_ami" "binplz_ami" {
   }
 }
 
-resource "aws_s3_bucket" "binplz_bucket" {
-  bucket_prefix = "my-tf-test-bucket"
-}
+resource "aws_s3_bucket" "binplz_bucket" {}
 
 resource "aws_s3_bucket_acl" "binplz_bucket_acl" {
   bucket = aws_s3_bucket.binplz_bucket.id
@@ -73,7 +68,7 @@ resource "aws_s3_bucket_acl" "binplz_bucket_acl" {
 }
 
 variable "binplz_ami_path" {
-  description = "Path to the binplz server ami image"
+  description = "Path to the binplz server AMI image"
   type        = string
 }
 
@@ -83,6 +78,9 @@ variable "binplz_image_name_hash" {
 }
 
 resource "aws_s3_object" "image_upload" {
+  # By default, uploading a new object doesn't invalidate downstream resources as long as the key stays the same.
+  # So, putting the hash in the key here makes it so that those resources properly get invalidated.
+  # We could also explicitly add a lifcycle.replace_triggered_by clause to every dependee, but I think this is safer.
   bucket = aws_s3_bucket.binplz_bucket.id
   key    = var.binplz_image_name_hash
   source = var.binplz_ami_path
@@ -99,12 +97,6 @@ resource "aws_ebs_snapshot_import" "binplz_image" {
   role_name = aws_iam_role.vmimport_role.id
 }
 
-# https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ebs_snapshot_import
-
-# https://docs.aws.amazon.com/vm-import/latest/userguide/required-permissions.html#vmimport-role
-# TODO KMS?
-# TODO License Configurations?
-# TODO Context Keys?
 resource "aws_iam_role" "vmimport_role" {
   name = "vmimport"
   assume_role_policy = jsonencode({
@@ -116,7 +108,7 @@ resource "aws_iam_role" "vmimport_role" {
         Action    = "sts:AssumeRole"
         Condition = {
           StringEquals = {
-            "sts:Externalid" = "vmimport" # TODO pull from variable
+            "sts:Externalid" = "vmimport"
           }
         }
       }
@@ -124,9 +116,8 @@ resource "aws_iam_role" "vmimport_role" {
   })
 }
 
-resource "aws_iam_policy_attachment" "vmimport_attach" {
-  name       = "vmimport_attach"
-  roles      = [aws_iam_role.vmimport_role.id]
+resource "aws_iam_role_policy_attachment" "vmimport_attach" {
+  role       = aws_iam_role.vmimport_role.id
   policy_arn = aws_iam_policy.vmimport_policy.arn
 }
 
