@@ -4,6 +4,9 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs";
     flake-utils.url = "github:numtide/flake-utils";
+    # This URL isn't stable, so the first time you check out this repo,
+    # all developers need to run `nix flake lock --update-input nixos-channel`.
+    # See https://github.com/binplz/binplz.dev/issues/5
     nixos-channel.url = "https://nixos.org/channels/nixos-22.05/nixexprs.tar.xz";
     nixos-generators.url = "github:nix-community/nixos-generators";
     nixos-generators.inputs.nixpkgs.follows = "nixpkgs";
