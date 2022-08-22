@@ -145,13 +145,6 @@
           in "${image-name}-${hash}";
       };
 
-      encrypt_secrets = pkgs.writeShellApplication {
-        name = "encrypt_secrets";
-        runtimeInputs = [ pkgs.age ];
-        text = ''
-          echo ${builtins.toString ./.}
-        '';
-      };
     in
     {
       inherit overlay;
@@ -178,7 +171,6 @@
           format = "amazon";
           modules = [ config.global config.amazon config.nixbuild ];
         };
-        inherit encrypt_secrets;
       };
 
     };
