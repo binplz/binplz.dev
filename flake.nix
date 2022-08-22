@@ -28,6 +28,19 @@
         };
         binplz-server = final.haskell.lib.compose.justStaticExecutables final.haskellPackages.binplz-server;
         binplz-docs = final.callPackage ./docs { };
+
+        # Small helper script for connecting to the nixbuild.net administration shell.
+        connect-nixbuildnet = final.writeShellApplication {
+          name = "connect-nixbuild.net";
+          runtimeInputs = [ final.openssh final.rlwrap ];
+          text = ''
+            # The nixbuild.net shell doesn't yet have read-line capabilities,
+            # so we use rlwrap here to give us read-line capabilities (like the
+            # ability to press the up arrow to go back to the previous
+            # command).
+            rlwrap ssh -i ./secrets/plaintext/nixbuild.pem eu.nixbuild.net shell
+            '';
+        };
       };
 
       image-name = "binplz-ami-${system}";
@@ -174,7 +187,7 @@
           format = "amazon";
           modules = [ config.global config.amazon config.nixbuild ];
         };
+        connect-nixbuildnet = pkgs.connect-nixbuildnet;
       };
-
     };
 }
