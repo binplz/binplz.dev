@@ -30,17 +30,6 @@
         "type": "github"
       }
     },
-    "nixos-channel": {
-      "locked": {
-        "narHash": "sha256-bpqNwyC5xrJz2H7oKABSoD+PISoULSnArKaCS+YP/8o=",
-        "type": "tarball",
-        "url": "https://nixos.org/channels/nixos-22.05/nixexprs.tar.xz"
-      },
-      "original": {
-        "type": "tarball",
-        "url": "https://nixos.org/channels/nixos-22.05/nixexprs.tar.xz"
-      }
-    },
     "nixos-generators": {
       "inputs": {
         "nixlib": "nixlib",
@@ -77,12 +66,28 @@
         "type": "github"
       }
     },
+    "programs-sqlite": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1661308222,
+        "narHash": "sha256-YhmosUh/UMBGXUvsK1RDToYOEAMECQbugCr+j+ZI69c=",
+        "owner": "jonascarpay",
+        "repo": "programs.sqlite",
+        "rev": "1b59bae416ebe429e5cb797446635650ce881b35",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jonascarpay",
+        "repo": "programs.sqlite",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
-        "nixos-channel": "nixos-channel",
         "nixos-generators": "nixos-generators",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "programs-sqlite": "programs-sqlite"
       }
     }
   },

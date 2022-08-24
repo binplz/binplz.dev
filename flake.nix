@@ -4,10 +4,8 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs";
     flake-utils.url = "github:numtide/flake-utils";
-    # This URL isn't stable, so the first time you check out this repo,
-    # all developers need to run `nix flake lock --update-input nixos-channel`.
-    # See https://github.com/binplz/binplz.dev/issues/5
-    nixos-channel.url = "https://nixos.org/channels/nixos-22.05/nixexprs.tar.xz";
+    programs-sqlite.url = "github:jonascarpay/programs.sqlite";
+    programs-sqlite.flake = false;
     nixos-generators.url = "github:nix-community/nixos-generators";
     nixos-generators.inputs.nixpkgs.follows = "nixpkgs";
   };
@@ -18,6 +16,8 @@
       system = "x86_64-linux";
 
       pkgs = import inputs.nixpkgs { inherit system; overlays = [ overlay ]; };
+
+      programs-db = "${inputs.programs-sqlite}/nixos-22.05/programs.sqlite";
 
       overlay = final: prev: {
         haskell = prev.haskell // {
@@ -39,7 +39,7 @@
             # ability to press the up arrow to go back to the previous
             # command).
             rlwrap ssh -i ./secrets/plaintext/nixbuild.pem eu.nixbuild.net shell
-            '';
+          '';
         };
       };
 
@@ -101,7 +101,7 @@
             script = ''
               ${pkgs.binplz-server}/bin/binplz-server \
                 --port ${builtins.toString port} \
-                --program-db ${inputs.nixos-channel}/programs.sqlite
+                --program-db ${programs-db}
             '';
             serviceConfig = {
               Restart = "always";
@@ -142,7 +142,7 @@
             pkgs.sqlite
             pkgs.age
           ];
-          BINPLZ_NIX_PROGRAM_DB = "${inputs.nixos-channel}/programs.sqlite";
+          BINPLZ_NIX_PROGRAM_DB = programs-db;
         };
 
       deploy-shell = pkgs.mkShell rec {
