@@ -24,6 +24,7 @@ extra-doc-files:
 common common-options
   build-depends:
     , aeson
+    , async
     , base                  >=4.9 && <5
     , bytestring
     , containers

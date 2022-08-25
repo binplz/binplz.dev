@@ -8,9 +8,13 @@
 
 module Lib (ServerConfig (..), ProgramDB (..), ApplicationDB (..), mainWithConfig) where
 
+import Control.Concurrent.Async (concurrently)
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Except (ExceptT (..), runExceptT, withExceptT)
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import Data.Coerce (coerce)
 import Data.Either (isLeft)
@@ -23,6 +27,8 @@ import Network.Wai.Handler.Warp (Port, run)
 import Servant
 import qualified System.Directory as Dir
 import System.FilePath ((</>))
+import System.IO (Handle)
+import qualified System.IO as IO
 import qualified System.Process as Proc
 
 -- | Top-level API. Examples:
@@ -148,42 +154,63 @@ buildTriplet appDB trip@(BinaryTriplet bin pkg sys) = withApplicationDB appDB $ 
     -- TODO is this the right way to do thread safety? or should we take more care on the application side?
     bump conn = liftIO $ execute conn "UPDATE binaries SET hits = hits + 1 WHERE binary = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
 
+-- | Write the data from the input 'Handle' to the output 'Handle' and collect
+-- the read bytes into a lazy bytestring.
+tee' :: Handle -> Handle -> IO Lazy.ByteString
+tee' input output = do
+  str <- Lazy.hGetContents input
+  result <-
+    BSL.fromChunks
+      <$> traverse (\chunk -> chunk <$ BS.hPut output chunk) (Lazy.toChunks str)
+  IO.hClose input
+  pure result
+
 nixBuild :: BinaryTriplet -> IO (Either String BSL.ByteString)
 nixBuild (BinaryTriplet bin pkg sys) = runExceptT $ do
-  -- TODO stream build process to stderr
   -- TODO make sure we can't get any XSS-like shenanigans
-  (exit, stdout, stderr) <-
-    liftIO $
-      Proc.readProcessWithExitCode
-        "nix"
-        ( ["build", "nixpkgs#legacyPackages." <> show sys <> ".pkgsStatic." <> unPackageName pkg]
-            -- Don't make a result symlink, just print it to stdout
-            <> ["--no-link", "--print-out-paths"]
-            -- Only allow access to files from NIX_PATH. Derivations can't read files like `/etc/shadow`.
-            <> ["--option", "restrict-eval", "true"]
-            -- Disallow IFD.  Probably not necessary, since Nixpkgs doesn't contain derivations that do IFD, but better to be on the safe side.
-            <> ["--option", "allow-import-from-derivation", "false"]
-            -- Make sure the sandbox is always used.
-            <> ["--option", "sandbox-fallback", "false"]
+  let process =
+        ( Proc.proc
+            "nix"
+            ( ["build", "nixpkgs#legacyPackages." <> show sys <> ".pkgsStatic." <> unPackageName pkg]
+                -- Don't make a result symlink, just print it to stdout
+                <> ["--no-link", "--print-out-paths"]
+                -- Only allow access to files from NIX_PATH. Derivations can't read files like `/etc/shadow`.
+                <> ["--option", "restrict-eval", "true"]
+                -- Disallow IFD.  Probably not necessary, since Nixpkgs doesn't contain derivations that do IFD, but better to be on the safe side.
+                <> ["--option", "allow-import-from-derivation", "false"]
+                -- Make sure the sandbox is always used.
+                <> ["--option", "sandbox-fallback", "false"]
+            )
         )
-        ""
+          { Proc.std_in = Proc.CreatePipe,
+            Proc.std_out = Proc.CreatePipe,
+            Proc.std_err = Proc.CreatePipe
+          }
+  (exit, stdout, stderr) <- ExceptT $
+    liftIO $
+      Proc.withCreateProcess process $ \minh mouth merrh processHandle -> do
+        case (minh, mouth, merrh) of
+          (Just inh, Just outh, Just errh) -> do
+            IO.hClose inh
+            (stdout, stderr) <- concurrently (tee' outh IO.stdout) (tee' errh IO.stderr)
+            exit <- Proc.waitForProcess processHandle
+            pure $ pure (exit, stdout, stderr)
+          _ -> pure $ throwError "couldn't read process output"
   liftIO . putStrLn $
     unlines
       [ "Finished a Nix build call",
-        "Exit code: " <> show exit,
-        "stdout: " <> stdout,
-        "stderr: " <> stderr
+        "Exit code: " <> show exit
       ]
-  case (exit, lines stdout) of
+  case (exit, BSL.lines stdout) of
     (ExitSuccess, [result]) -> do
-      let fullPath = result </> "bin" </> unBinaryName bin
+      let fullPath = BSL.unpack result </> "bin" </> unBinaryName bin
       liftIO . putStrLn $ "Successfully built " <> fullPath
       fileExists <- liftIO $ Dir.doesFileExist fullPath
       unless fileExists $ throwError "Package did not produce expected binary"
       isExecutable <- liftIO $ Dir.executable <$> Dir.getPermissions fullPath
       unless isExecutable $ throwError "Binary specified by the triplet was not an executable"
       liftIO $ BSL.readFile fullPath
-    _ -> throwError $ unlines ["An error occurred.", "  Exit code: " <> show exit, "  error:" <> stderr]
+    _ -> throwError $ unlines ["An error occurred.", "  Exit code: " <> show exit, "  error:" <> BSL.unpack stderr]
 
 -- TODO rename name field to binary
 -- TODO maybe we should save (and even index by) store path?
