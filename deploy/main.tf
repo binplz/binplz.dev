@@ -8,6 +8,19 @@ terraform {
     }
   }
   required_version = ">= 1.2.0"
+
+  # We use Terraform Cloud to synchronize Terraform state.  Before deploying
+  # with Terraform, you'll need to create an account at
+  # https://app.terraform.io and make sure you can access
+  # https://app.terraform.io/app/binplz/workspaces/binplz.
+  #
+  # You'll then need to login on the CLI with `terraform login`.
+  cloud {
+    organization = "binplz"
+    workspaces {
+      name = "binplz"
+    }
+  }
 }
 
 provider "aws" {
