@@ -16,6 +16,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.ByteString.Lazy.Char8 as BSL
+import qualified Data.ByteString.Lazy.UTF8 as UTF8
 import Data.Coerce (coerce)
 import Data.Either (isLeft)
 import Data.Maybe (fromMaybe)
@@ -203,14 +204,14 @@ nixBuild (BinaryTriplet bin pkg sys) = runExceptT $ do
       ]
   case (exit, BSL.lines stdout) of
     (ExitSuccess, [result]) -> do
-      let fullPath = BSL.unpack result </> "bin" </> unBinaryName bin
+      let fullPath = UTF8.toString result </> "bin" </> unBinaryName bin
       liftIO . putStrLn $ "Successfully built " <> fullPath
       fileExists <- liftIO $ Dir.doesFileExist fullPath
       unless fileExists $ throwError "Package did not produce expected binary"
       isExecutable <- liftIO $ Dir.executable <$> Dir.getPermissions fullPath
       unless isExecutable $ throwError "Binary specified by the triplet was not an executable"
       liftIO $ BSL.readFile fullPath
-    _ -> throwError $ unlines ["An error occurred.", "  Exit code: " <> show exit, "  error:" <> BSL.unpack stderr]
+    _ -> throwError $ unlines ["An error occurred.", "  Exit code: " <> show exit, "  error:" <> UTF8.toString stderr]
 
 -- TODO rename name field to binary
 -- TODO maybe we should save (and even index by) store path?
