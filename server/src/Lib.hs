@@ -128,6 +128,8 @@ server (ServerConfig programDB appDB _) =
         buildTriplet appDB (BinaryTriplet bin pkg sys) commit
 
 -- | The default Nixpkgs commit we use when the user doesn't provide one.
+--
+-- This is nixos-22.05 as of 2022-08-29.
 defaultNixpkgsCommit :: NixpkgsCommit
 defaultNixpkgsCommit = NixpkgsCommit "0ba2543f8c855d7be8e90ef6c8dc89c1617e8a08"
 
@@ -243,7 +245,7 @@ nixBuild (BinaryTriplet bin pkg sys) commit = runExceptT $ do
       (\out -> teePrefix (fromString "out> ") out IO.stdout)
       (\err -> teePrefix (fromString "err> ") err IO.stderr)
       "nix"
-      ( ["build", "nixpkgs#legacyPackages." <> show sys <> ".pkgsStatic." <> unPackageName pkg]
+      ( ["build", "github:NixOS/nixpkgs/" <> Text.unpack (unNixpkgsCommit commit) <> "#legacyPackages." <> show sys <> ".pkgsStatic." <> unPackageName pkg]
           -- Don't make a result symlink, just print it to stdout
           <> ["--no-link", "--print-out-paths"]
           -- Print build logs to stderr
