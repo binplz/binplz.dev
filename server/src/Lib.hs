@@ -18,10 +18,13 @@ import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import qualified Data.ByteString.Lazy.UTF8 as UTF8
+import Data.Char (isHexDigit)
 import Data.Coerce (coerce)
 import Data.Either (isLeft)
 import Data.Maybe (fromMaybe)
 import Data.String (fromString)
+import Data.Text (Text)
+import qualified Data.Text as Text
 import Database.SQLite.Simple
 import Database.SQLite.Simple.FromField (FromField (..))
 import Database.SQLite.Simple.ToField (ToField (..))
@@ -34,14 +37,16 @@ import System.IO (Handle)
 import qualified System.IO as IO
 import qualified System.Process as Proc
 
+type GetBinaryWithOptions = QueryParam "sys" Platform :> QueryParam "nixpkgs-commit" NixpkgsCommit :> Get '[OctetStream] BSL.ByteString
+
 -- | Top-level API. Examples:
 --   localhost:8081/ps
 --   localhost:8081/procps/ps?sys=aarch64-linux
 --  TODO API documentation
 type API =
   Get '[PlainText] NoContent
-    :<|> Capture "binary-name" BinaryName :> QueryParam "sys" Platform :> Get '[OctetStream] BSL.ByteString
-    :<|> Capture "package-name" PackageName :> Capture "binary-name" BinaryName :> QueryParam "sys" Platform :> Get '[OctetStream] BSL.ByteString
+    :<|> Capture "binary-name" BinaryName :> GetBinaryWithOptions
+    :<|> Capture "package-name" PackageName :> Capture "binary-name" BinaryName :> GetBinaryWithOptions
 
 newtype BinaryName = BinaryName {unBinaryName :: String}
   deriving newtype (Show, ToField, FromHttpApiData)
@@ -90,6 +95,19 @@ data ServerConfig = ServerConfig
   }
   deriving (Show)
 
+newtype NixpkgsCommit = NixpkgsCommit { unNixpkgsCommit :: Text }
+  deriving newtype (Show)
+
+instance FromHttpApiData NixpkgsCommit where
+  parseQueryParam rawCommit = do
+    when (Text.length rawCommit  < 3) $
+      Left "too short. must be at least than 3 characters"
+    when (Text.length rawCommit  > 40) $
+      Left "too long. must be at most 40 characters"
+    unless (Text.all isHexDigit rawCommit) $
+      Left "can only consist of hexidecimal characters (0-9 and a-e)"
+    pure $ NixpkgsCommit rawCommit
+
 -- | Serve the API
 -- This is a matter of
 --   1. Filling in missing package/platform parameters to construct a proper 'Triplet'
@@ -101,12 +119,34 @@ server (ServerConfig programDB appDB _) =
     :<|> (\bin -> handle bin Nothing)
     :<|> (\pkg bin -> handle bin (Just pkg))
   where
-    handle :: BinaryName -> Maybe PackageName -> Maybe Platform -> Handler BSL.ByteString
-    handle bin mpkg msys =
+    handle :: BinaryName -> Maybe PackageName -> Maybe Platform -> Maybe NixpkgsCommit -> Handler BSL.ByteString
+    handle bin mpkg msys mcommit =
       Handler . withExceptT (\err -> err400 {errBody = BSL.pack err}) $ do
+        commit <- resolveCommit mcommit
         let sys = fromMaybe X86_64_Linux msys
         pkg <- maybe (resolvePackageName programDB bin sys) pure mpkg
-        buildTriplet appDB (BinaryTriplet bin pkg sys)
+        buildTriplet appDB (BinaryTriplet bin pkg sys) commit
+
+-- | The default Nixpkgs commit we use when the user doesn't provide one.
+defaultNixpkgsCommit :: NixpkgsCommit
+defaultNixpkgsCommit = NixpkgsCommit "0ba2543f8c855d7be8e90ef6c8dc89c1617e8a08"
+
+-- | Figure out what 'NixpkgsCommit' to use based on what the user passes in.
+--
+-- If the user doesn't specify a 'NixpkgsCommit', then just use our
+-- 'defaultNixpkgsCommit'.
+--
+-- If the user does specify a 'NixpkgsCommit', make sure it is a prefix of
+-- our 'defaultNixpkgsCommit', and then just use 'defaultNixpkgsCommit'.
+--
+-- TODO: At some point, we'd like to lift the restriction on what commits an
+-- end-user can specify.
+resolveCommit :: Maybe NixpkgsCommit -> ExceptT String IO NixpkgsCommit
+resolveCommit Nothing = pure defaultNixpkgsCommit
+resolveCommit (Just (NixpkgsCommit rawCommit)) = do
+  unless (Text.isPrefixOf rawCommit $ unNixpkgsCommit defaultNixpkgsCommit) $
+    throwError $ "nixpkgs-commit parameter value " <> Text.unpack rawCommit <> " is not allowed"
+  pure defaultNixpkgsCommit
 
 redirectToDocs :: forall a. Handler a
 redirectToDocs = throwError err301 {errHeaders = [("Location", "https://docs.binplz.dev")]}
@@ -125,9 +165,9 @@ resolvePackageName (ProgramDB dbpath) bin sys = do
 -- | 1. See if we know this BinaryTriplet to be unbuildable
 --   2. If buildable, build it
 --   3. Bump the count
-buildTriplet :: ApplicationDB -> BinaryTriplet -> ExceptT String IO BSL.ByteString
-buildTriplet appDB trip@(BinaryTriplet bin pkg sys) = withApplicationDB appDB $ \conn -> do
-  liftIO . putStrLn $ "Building " <> show trip
+buildTriplet :: ApplicationDB -> BinaryTriplet -> NixpkgsCommit -> ExceptT String IO BSL.ByteString
+buildTriplet appDB trip@(BinaryTriplet bin pkg sys) commit = withApplicationDB appDB $ \conn -> do
+  liftIO . putStrLn $ "At Nixpkgs commit " <> show commit <> " building " <> show trip
   errorFlags :: [Only Bool] <- liftIO $ query conn "SELECT error FROM binaries WHERE binary = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
   case errorFlags of
     [Only True] -> do
@@ -139,7 +179,7 @@ buildTriplet appDB trip@(BinaryTriplet bin pkg sys) = withApplicationDB appDB $ 
     [] -> do
       -- TODO thread safety issue: we have an unguarded insert with a primary key, this throws an exception if in the meantime someone else makes the same request
       -- TODO maybe just use an atomic SQL transaction is enough?
-      res <- liftIO $ nixBuild trip
+      res <- liftIO $ nixBuild trip commit
       liftIO $
         execute
           conn
@@ -148,7 +188,7 @@ buildTriplet appDB trip@(BinaryTriplet bin pkg sys) = withApplicationDB appDB $ 
       ExceptT $ pure res -- equiv to either throwError pure
     [Only False] -> do
       -- TODO Don't invoke nix?
-      res <- liftIO $ nixBuild trip
+      res <- liftIO $ nixBuild trip commit
       case res of
         Left _ -> error "what to do" -- TODO
         Right bs -> bs <$ bump conn
@@ -194,8 +234,9 @@ streamCommand onStdout onStderr cmd args = do
             pure $ pure (exit, stdout, stderr)
           _ -> pure $ throwError "couldn't read process output"
 
-nixBuild :: BinaryTriplet -> IO (Either String BSL.ByteString)
-nixBuild (BinaryTriplet bin pkg sys) = runExceptT $ do
+nixBuild :: BinaryTriplet -> NixpkgsCommit -> IO (Either String BSL.ByteString)
+nixBuild (BinaryTriplet bin pkg sys) commit = runExceptT $ do
+  -- TODO stream build process to stderr
   -- TODO make sure we can't get any XSS-like shenanigans
   (exit, stdout, stderr) <-
     streamCommand
