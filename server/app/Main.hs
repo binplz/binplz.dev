@@ -1,6 +1,7 @@
 import Lib
 import Options (Option (..), runOptionParser)
 import qualified Options.Applicative as Opt
+import qualified System.IO as IO
 
 getConfig :: IO ServerConfig
 getConfig = runOptionParser $ \envOption ->
@@ -43,4 +44,7 @@ getConfig = runOptionParser $ \envOption ->
       )
 
 main :: IO ()
-main = getConfig >>= mainWithConfig
+main = do
+  IO.hSetBuffering IO.stdout IO.LineBuffering
+  cfg <- getConfig
+  mainWithConfig cfg
