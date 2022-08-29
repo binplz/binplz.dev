@@ -175,6 +175,8 @@ nixBuild (BinaryTriplet bin pkg sys) = runExceptT $ do
             ( ["build", "nixpkgs#legacyPackages." <> show sys <> ".pkgsStatic." <> unPackageName pkg]
                 -- Don't make a result symlink, just print it to stdout
                 <> ["--no-link", "--print-out-paths"]
+                -- Print build logs to stderr
+                <> ["--print-build-logs"]
                 -- Only allow access to files from NIX_PATH. Derivations can't read files like `/etc/shadow`.
                 <> ["--option", "restrict-eval", "true"]
                 -- Disallow IFD.  Probably not necessary, since Nixpkgs doesn't contain derivations that do IFD, but better to be on the safe side.
