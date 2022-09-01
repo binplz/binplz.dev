@@ -5,6 +5,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE InstanceSigs #-}
 
 module Lib (ServerConfig (..), ProgramDB (..), ApplicationDB (..), mainWithConfig) where
 
@@ -26,8 +27,9 @@ import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Database.SQLite.Simple
-import Database.SQLite.Simple.FromField (FromField (..))
+import Database.SQLite.Simple.FromField (FromField (..), Field, returnError, fieldData)
 import Database.SQLite.Simple.ToField (ToField (..))
+import Database.SQLite.Simple.Ok (Ok)
 import GHC.IO.Exception (ExitCode (ExitSuccess))
 import Network.Wai.Handler.Warp (Port, run)
 import Servant
@@ -70,12 +72,37 @@ instance FromHttpApiData Platform where
   parseQueryParam "armv7l-linux" = pure ARMV7_Linux
   parseQueryParam sys = Left $ "Unknown platform: " <> sys
 
+newtype NixpkgsCommit = NixpkgsCommit { unNixpkgsCommit :: Text }
+  deriving newtype (Show, ToField)
+
+instance FromField NixpkgsCommit where
+  fromField :: Field -> Ok NixpkgsCommit
+  fromField rawCommitField =
+    case fieldData rawCommitField of
+      SQLText rawCommit ->
+        either
+          (returnError ConversionFailed rawCommitField . Text.unpack)
+          pure
+          (mkNixpkgsCommit rawCommit)
+      _ -> returnError Incompatible rawCommitField "NixpkgsCommit field is not SQLText"
+
+mkNixpkgsCommit :: Text -> Either Text NixpkgsCommit
+mkNixpkgsCommit rawCommit
+  | Text.length rawCommit < 3 = Left "too short. must be at least than 3 characters"
+  | Text.length rawCommit > 40 = Left "too long. must be at most 40 characters"
+  | not (Text.all isHexDigit rawCommit) = Left "can only consist of hexidecimal characters (0-9 and a-e)"
+  | otherwise = Right $ NixpkgsCommit rawCommit
+
+instance FromHttpApiData NixpkgsCommit where
+  parseQueryParam = mkNixpkgsCommit
+
 -- | A BinaryTriplet uniquely identifies a binary in nixpkgs.
 -- A BinaryTriplet is not a proof that that binary exists and is buildable, though.
 data BinaryTriplet = BinaryTriplet
   { _tripBinary :: BinaryName,
     _tripPackage :: PackageName,
-    _tripPlatform :: Platform
+    _tripPlatform :: Platform,
+    _tripCommit :: NixpkgsCommit
   }
   deriving (Show)
 
@@ -95,19 +122,6 @@ data ServerConfig = ServerConfig
   }
   deriving (Show)
 
-newtype NixpkgsCommit = NixpkgsCommit { unNixpkgsCommit :: Text }
-  deriving newtype (Show)
-
-mkNixpkgsCommit :: Text -> Either Text NixpkgsCommit
-mkNixpkgsCommit rawCommit
-  | Text.length rawCommit < 3 = Left "too short. must be at least than 3 characters"
-  | Text.length rawCommit > 40 = Left "too long. must be at most 40 characters"
-  | not (Text.all isHexDigit rawCommit) = Left "can only consist of hexidecimal characters (0-9 and a-e)"
-  | otherwise = Right $ NixpkgsCommit rawCommit
-
-instance FromHttpApiData NixpkgsCommit where
-  parseQueryParam = mkNixpkgsCommit
-
 -- | Serve the API
 -- This is a matter of
 --   1. Filling in missing package/platform parameters to construct a proper 'Triplet'
@@ -125,7 +139,7 @@ server (ServerConfig programDB appDB _) =
         commit <- resolveCommit mcommit
         let sys = fromMaybe X86_64_Linux msys
         pkg <- maybe (resolvePackageName programDB bin sys) pure mpkg
-        buildTriplet appDB (BinaryTriplet bin pkg sys) commit
+        buildTriplet appDB (BinaryTriplet bin pkg sys commit)
 
 -- | The default Nixpkgs commit we use when the user doesn't provide one.
 --
@@ -167,10 +181,15 @@ resolvePackageName (ProgramDB dbpath) bin sys = do
 -- | 1. See if we know this BinaryTriplet to be unbuildable
 --   2. If buildable, build it
 --   3. Bump the count
-buildTriplet :: ApplicationDB -> BinaryTriplet -> NixpkgsCommit -> ExceptT String IO BSL.ByteString
-buildTriplet appDB trip@(BinaryTriplet bin pkg sys) commit = withApplicationDB appDB $ \conn -> do
+buildTriplet :: ApplicationDB -> BinaryTriplet -> ExceptT String IO BSL.ByteString
+buildTriplet appDB trip@(BinaryTriplet bin pkg sys commit) = withApplicationDB appDB $ \conn -> do
   liftIO . putStrLn $ "At Nixpkgs commit " <> show commit <> " building " <> show trip
-  errorFlags :: [Only Bool] <- liftIO $ query conn "SELECT error FROM binaries WHERE binary = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
+  errorFlags :: [Only Bool] <-
+    liftIO $
+      query
+        conn
+        "SELECT error FROM binaries WHERE binary = ? AND package = ? AND platform = ? AND nixpkgsCommit = ?"
+        (bin, pkg, show sys, commit)
   case errorFlags of
     [Only True] -> do
       bump conn
@@ -181,16 +200,16 @@ buildTriplet appDB trip@(BinaryTriplet bin pkg sys) commit = withApplicationDB a
     [] -> do
       -- TODO thread safety issue: we have an unguarded insert with a primary key, this throws an exception if in the meantime someone else makes the same request
       -- TODO maybe just use an atomic SQL transaction is enough?
-      res <- liftIO $ nixBuild trip commit
+      res <- liftIO $ nixBuild trip
       liftIO $
         execute
           conn
-          "INSERT INTO binaries (binary, package, platform, hits, error) VALUES (?,?,?,?,?)"
-          (bin, pkg, show sys, 1 :: Int, isLeft res)
+          "INSERT INTO binaries (binary, package, platform, nixpkgsCommit, hits, error) VALUES (?, ?, ?, ?, ?, ?)"
+          (bin, pkg, show sys, commit, 1 :: Int, isLeft res)
       ExceptT $ pure res -- equiv to either throwError pure
     [Only False] -> do
       -- TODO Don't invoke nix?
-      res <- liftIO $ nixBuild trip commit
+      res <- liftIO $ nixBuild trip
       case res of
         Left _ -> error "what to do" -- TODO
         Right bs -> bs <$ bump conn
@@ -236,8 +255,8 @@ streamCommand onStdout onStderr cmd args = do
             pure $ pure (exit, stdout, stderr)
           _ -> pure $ throwError "couldn't read process output"
 
-nixBuild :: BinaryTriplet -> NixpkgsCommit -> IO (Either String BSL.ByteString)
-nixBuild (BinaryTriplet bin pkg sys) commit = runExceptT $ do
+nixBuild :: BinaryTriplet -> IO (Either String BSL.ByteString)
+nixBuild (BinaryTriplet bin pkg sys commit) = runExceptT $ do
   -- TODO stream build process to stderr
   -- TODO make sure we can't get any XSS-like shenanigans
   (exit, stdout, stderr) <-
@@ -284,9 +303,10 @@ withApplicationDB (ApplicationDB path) k = ExceptT $
       \ ( binary   TEXT NOT NULL \
       \ , package  TEXT NOT NULL \
       \ , platform TEXT NOT NULL \
+      \ , nixpkgsCommit TEXT NOT NULL \
       \ , hits     INTEGER NOT NULL \
       \ , error    BOOLEAN NOT NULL \
-      \ , PRIMARY KEY (binary, package, platform) )"
+      \ , PRIMARY KEY (binary, package, platform, nixpkgsCommit) )"
     runExceptT (k conn)
 
 -- TODO multithreading
