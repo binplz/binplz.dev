@@ -96,9 +96,9 @@ mkNixpkgsCommit rawCommit
 instance FromHttpApiData NixpkgsCommit where
   parseQueryParam = mkNixpkgsCommit
 
--- | A BinaryTriplet uniquely identifies a binary in nixpkgs.
--- A BinaryTriplet is not a proof that that binary exists and is buildable, though.
-data BinaryTriplet = BinaryTriplet
+-- | A BinInfo uniquely identifies a binary in nixpkgs.
+-- A BinInfo is not a proof that that binary exists and is buildable, though.
+data BinInfo = BinInfo
   { _tripBinary :: BinaryName,
     _tripPackage :: PackageName,
     _tripPlatform :: Platform,
@@ -139,7 +139,7 @@ server (ServerConfig programDB appDB _) =
         commit <- resolveCommit mcommit
         let sys = fromMaybe X86_64_Linux msys
         pkg <- maybe (resolvePackageName programDB bin sys) pure mpkg
-        buildTriplet appDB (BinaryTriplet bin pkg sys commit)
+        buildTriplet appDB (BinInfo bin pkg sys commit)
 
 -- | The default Nixpkgs commit we use when the user doesn't provide one.
 --
@@ -178,11 +178,11 @@ resolvePackageName (ProgramDB dbpath) bin sys = do
     [] -> throwError $ "No known package provides " <> unBinaryName bin <> " for " <> show sys <> ". Consider manually specifying the package."
     candidates -> pure $ if coerce bin `elem` candidates then coerce bin else minimum candidates
 
--- | 1. See if we know this BinaryTriplet to be unbuildable
+-- | 1. See if we know this BinInfo to be unbuildable
 --   2. If buildable, build it
 --   3. Bump the count
-buildTriplet :: ApplicationDB -> BinaryTriplet -> ExceptT String IO BSL.ByteString
-buildTriplet appDB trip@(BinaryTriplet bin pkg sys commit) = withApplicationDB appDB $ \conn -> do
+buildTriplet :: ApplicationDB -> BinInfo -> ExceptT String IO BSL.ByteString
+buildTriplet appDB trip@(BinInfo bin pkg sys commit) = withApplicationDB appDB $ \conn -> do
   liftIO . putStrLn $ "At Nixpkgs commit " <> show commit <> " building " <> show trip
   errorFlags :: [Only Bool] <-
     liftIO $
@@ -255,8 +255,8 @@ streamCommand onStdout onStderr cmd args = do
             pure $ pure (exit, stdout, stderr)
           _ -> pure $ throwError "couldn't read process output"
 
-nixBuild :: BinaryTriplet -> IO (Either String BSL.ByteString)
-nixBuild (BinaryTriplet bin pkg sys commit) = runExceptT $ do
+nixBuild :: BinInfo -> IO (Either String BSL.ByteString)
+nixBuild (BinInfo bin pkg sys commit) = runExceptT $ do
   -- TODO stream build process to stderr
   -- TODO make sure we can't get any XSS-like shenanigans
   (exit, stdout, stderr) <-
