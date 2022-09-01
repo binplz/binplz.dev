@@ -98,15 +98,15 @@ data ServerConfig = ServerConfig
 newtype NixpkgsCommit = NixpkgsCommit { unNixpkgsCommit :: Text }
   deriving newtype (Show)
 
+mkNixpkgsCommit :: Text -> Either Text NixpkgsCommit
+mkNixpkgsCommit rawCommit
+  | Text.length rawCommit < 3 = Left "too short. must be at least than 3 characters"
+  | Text.length rawCommit > 40 = Left "too long. must be at most 40 characters"
+  | not (Text.all isHexDigit rawCommit) = Left "can only consist of hexidecimal characters (0-9 and a-e)"
+  | otherwise = Right $ NixpkgsCommit rawCommit
+
 instance FromHttpApiData NixpkgsCommit where
-  parseQueryParam rawCommit = do
-    when (Text.length rawCommit  < 3) $
-      Left "too short. must be at least than 3 characters"
-    when (Text.length rawCommit  > 40) $
-      Left "too long. must be at most 40 characters"
-    unless (Text.all isHexDigit rawCommit) $
-      Left "can only consist of hexidecimal characters (0-9 and a-e)"
-    pure $ NixpkgsCommit rawCommit
+  parseQueryParam = mkNixpkgsCommit
 
 -- | Serve the API
 -- This is a matter of
