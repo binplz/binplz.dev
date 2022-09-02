@@ -11,8 +11,6 @@ module Lib (ServerConfig (..), ProgramDB (..), ApplicationDB (..), mainWithConfi
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Except (ExceptT (..), runExceptT, withExceptT)
-import Data.ByteString (ByteString)
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import Data.Coerce (coerce)
 import Data.Either (isLeft)
@@ -33,8 +31,8 @@ import qualified System.Process as Proc
 --  TODO API documentation
 type API =
   Get '[PlainText] NoContent
-    :<|> Capture "binary-name" BinaryName :> QueryParam "sys" Platform :> Get '[OctetStream] ByteString
-    :<|> Capture "package-name" PackageName :> Capture "binary-name" BinaryName :> QueryParam "sys" Platform :> Get '[OctetStream] ByteString
+    :<|> Capture "binary-name" BinaryName :> QueryParam "sys" Platform :> Get '[OctetStream] BSL.ByteString
+    :<|> Capture "package-name" PackageName :> Capture "binary-name" BinaryName :> QueryParam "sys" Platform :> Get '[OctetStream] BSL.ByteString
 
 newtype BinaryName = BinaryName {unBinaryName :: String}
   deriving newtype (Show, ToField, FromHttpApiData)
@@ -91,7 +89,7 @@ server (ServerConfig programDB appDB _) =
     :<|> (\bin -> handle bin Nothing)
     :<|> (\pkg bin -> handle bin (Just pkg))
   where
-    handle :: BinaryName -> Maybe PackageName -> Maybe Platform -> Handler ByteString
+    handle :: BinaryName -> Maybe PackageName -> Maybe Platform -> Handler BSL.ByteString
     handle bin mpkg msys =
       Handler . withExceptT (\err -> err400 {errBody = BSL.pack err}) $ do
         let sys = fromMaybe X86_64_Linux msys
@@ -115,7 +113,7 @@ resolvePackageName (ProgramDB dbpath) bin sys = do
 -- | 1. See if we know this BinaryTriplet to be unbuildable
 --   2. If buildable, build it
 --   3. Bump the count
-buildTriplet :: ApplicationDB -> BinaryTriplet -> ExceptT String IO ByteString
+buildTriplet :: ApplicationDB -> BinaryTriplet -> ExceptT String IO BSL.ByteString
 buildTriplet appDB trip@(BinaryTriplet bin pkg sys) = withApplicationDB appDB $ \conn -> do
   liftIO . putStrLn $ "Building " <> show trip
   errorFlags :: [Only Bool] <- liftIO $ query conn "SELECT error FROM binaries WHERE binary = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
@@ -147,7 +145,7 @@ buildTriplet appDB trip@(BinaryTriplet bin pkg sys) = withApplicationDB appDB $ 
     -- TODO is this the right way to do thread safety? or should we take more care on the application side?
     bump conn = liftIO $ execute conn "UPDATE binaries SET hits = hits + 1 WHERE binary = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
 
-nixBuild :: BinaryTriplet -> IO (Either String ByteString)
+nixBuild :: BinaryTriplet -> IO (Either String BSL.ByteString)
 nixBuild (BinaryTriplet bin pkg sys) = runExceptT $ do
   -- TODO stream build process to stderr
   -- TODO make sure we can't get any XSS-like shenanigans
@@ -181,7 +179,7 @@ nixBuild (BinaryTriplet bin pkg sys) = runExceptT $ do
       unless fileExists $ throwError "Package did not produce expected binary"
       isExecutable <- liftIO $ Dir.executable <$> Dir.getPermissions fullPath
       unless isExecutable $ throwError "Binary specified by the triplet was not an executable"
-      liftIO $ BS.readFile fullPath
+      liftIO $ BSL.readFile fullPath
     _ -> throwError $ unlines ["An error occurred.", "  Exit code: " <> show exit, "  error:" <> stderr]
 
 -- TODO rename name field to binary
