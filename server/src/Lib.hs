@@ -43,14 +43,17 @@ newtype PackageName = PackageName {unPackageName :: String}
 data Platform
   = X86_64_Linux
   | AARCH_64_Linux
+  | ARMV7_Linux
 
 instance Show Platform where
   show X86_64_Linux = "x86_64-linux"
   show AARCH_64_Linux = "aarch64-linux"
+  show ARMV7_Linux = "armv7l-linux"
 
 instance FromHttpApiData Platform where
   parseQueryParam "aarch64-linux" = pure AARCH_64_Linux
   parseQueryParam "x86_64-linux" = pure X86_64_Linux
+  parseQueryParam "armv7l-linux" = pure ARMV7_Linux
   parseQueryParam sys = Left $ "Unknown platform: " <> sys
 
 -- | A BinaryTriplet uniquely identifies a binary in nixpkgs.

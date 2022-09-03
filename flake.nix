@@ -78,12 +78,14 @@
           };
           nix = {
             distributedBuilds = true;
-            buildMachines = [{
-              hostName = "eu.nixbuild.net";
-              system = "x86_64-linux";
-              maxJobs = 100;
-              supportedFeatures = [ "benchmark" "big-parallel" ];
-            }];
+            buildMachines = builtins.map
+              (system: {
+                inherit system;
+                hostName = "eu.nixbuild.net";
+                maxJobs = 100;
+                supportedFeatures = [ "benchmark" "big-parallel" ];
+              })
+              [ "x86_64-linux" "aarch64-linux" "armv7l-linux" ];
             extraOptions = ''
               experimental-features = nix-command flakes
             '';
@@ -180,7 +182,7 @@
         server-vm = inputs.nixos-generators.nixosGenerate {
           inherit pkgs;
           format = "vm";
-          modules = [ config.global config.qemu ];
+          modules = [ config.global config.qemu config.nixbuild ];
         };
         server-ami = inputs.nixos-generators.nixosGenerate {
           inherit pkgs;
