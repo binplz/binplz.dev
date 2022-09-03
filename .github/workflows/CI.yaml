@@ -30,22 +30,15 @@ jobs:
         run: nix build -L '.#devShell.x86_64-linux'
 
   stack-build:
-    name: Stack ${{ matrix.resolver }}
+    name: Stack lts-19
     strategy:
       fail-fast: false
-      matrix:
-        resolver: [ nightly, lts-19 ]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - uses: haskell/actions/setup@v1
         with:
           enable-stack: true
-      ## For some reason, stack caching seems to be very brittle, and cause a lot of build failures.
-      ## I haven't investigated very thoroughly what to best do about this, but for now, I'm just not caching stack builds.
-      - run: stack init --resolver ${{ matrix.resolver }}
-      - name: Generate lock file
-        run: stack build -v --dry-run
       - uses: freckle/stack-cache-action@v2.0.3
       - run: stack build --only-dependencies
       - run: stack build
@@ -56,7 +49,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ghc: [ '8.10.7', '9.2.2' ]
+        ghc: [ '8.10.7', '9.2.3' ]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -68,6 +61,6 @@ jobs:
           path: |
             ~/.cabal
             dist-newstyle
-          key: cabal-cache-${{ matrix.os }}-${{ matrix.ghc }}-${{ hashFiles('**/*.cabal') }}
+          key: cabal-cache-${{ matrix.ghc }}-${{ hashFiles('**/*.cabal') }}
       - run: cabal build all --only-dependencies
       - run: cabal build all
