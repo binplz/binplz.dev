@@ -52,7 +52,6 @@ jobs:
             ${{ runner.os }}-stack-work-
       - run: stack build --only-dependencies
       - run: stack build
-      - run: stack build --haddock
 
   cabal-build:
     name: Cabal with GHC ${{ matrix.ghc }}
@@ -78,3 +77,4 @@ jobs:
           restore-keys: ${{ runner.os }}-${{ matrix.ghc }}-
       - run: cabal build all --only-dependencies
       - run: cabal build all
+      - run: cabal haddock all
