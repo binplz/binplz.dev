@@ -45,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ghc: [ '8.10.7', '9.2.3' ]
+        ghc: [ '8.10.7', '9.2.4' ]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
