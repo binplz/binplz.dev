@@ -1,0 +1,55 @@
+name: Weekly unstable build
+
+on:
+  schedule:
+    # Every Sunday at 00:00
+    - cron: '0 0 * * Sun'
+
+  workflow_dispatch:
+
+jobs:
+
+  nix-build-server:
+    name: Nix build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: cachix/install-nix-action@v16
+      - run: nix build -L --override-input nixpkgs "github:NixOS/nixpkgs/nixos-unstable" '.#server'
+      - run: nix build -L --override-input nixpkgs "github:NixOS/nixpkgs/nixos-unstable" '.#docs'
+      - run: nix build -L --override-input nixpkgs "github:NixOS/nixpkgs/nixos-unstable" '.#devShell.x86_64-linux'
+
+  stack-build:
+    name: Stack ${{ matrix.resolver }}
+    strategy:
+      fail-fast: false
+      matrix:
+        resolver: [ nightly, lts-19 ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: haskell/actions/setup@v1
+        with:
+          enable-stack: true
+      - run: |
+          rm stack.yaml
+          rm stack.yaml.lock
+      - run: stack init --resolver ${{ matrix.resolver }}
+      - run: stack build --only-dependencies
+      - run: stack build
+      - run: stack build --haddock
+
+  cabal-build:
+    name: Cabal with GHC ${{ matrix.ghc }}
+    strategy:
+      fail-fast: false
+      matrix:
+        ghc: [ '8.10', '9.0', '9.2', latest ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: haskell/actions/setup@v1
+        with:
+          ghc-version: ${{ matrix.ghc }}
+      - run: cabal build all --only-dependencies
+      - run: cabal build all
