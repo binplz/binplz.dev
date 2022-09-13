@@ -5,6 +5,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE InstanceSigs #-}
 
 module Lib (ServerConfig (..), ProgramDB (..), ApplicationDB (..), mainWithConfig) where
 
@@ -18,13 +19,17 @@ import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import qualified Data.ByteString.Lazy.UTF8 as UTF8
+import Data.Char (isHexDigit)
 import Data.Coerce (coerce)
 import Data.Either (isLeft)
 import Data.Maybe (fromMaybe)
 import Data.String (fromString)
+import Data.Text (Text)
+import qualified Data.Text as Text
 import Database.SQLite.Simple
-import Database.SQLite.Simple.FromField (FromField (..))
+import Database.SQLite.Simple.FromField (FromField (..), Field, returnError, fieldData)
 import Database.SQLite.Simple.ToField (ToField (..))
+import Database.SQLite.Simple.Ok (Ok)
 import GHC.IO.Exception (ExitCode (ExitSuccess))
 import Network.Wai.Handler.Warp (Port, run)
 import Servant
@@ -34,14 +39,16 @@ import System.IO (Handle)
 import qualified System.IO as IO
 import qualified System.Process as Proc
 
+type GetBinaryWithOptions = QueryParam "sys" Platform :> QueryParam "nixpkgs-commit" NixpkgsCommit :> Get '[OctetStream] BSL.ByteString
+
 -- | Top-level API. Examples:
 --   localhost:8081/ps
 --   localhost:8081/procps/ps?sys=aarch64-linux
 --  TODO API documentation
 type API =
   Get '[PlainText] NoContent
-    :<|> Capture "binary-name" BinaryName :> QueryParam "sys" Platform :> Get '[OctetStream] BSL.ByteString
-    :<|> Capture "package-name" PackageName :> Capture "binary-name" BinaryName :> QueryParam "sys" Platform :> Get '[OctetStream] BSL.ByteString
+    :<|> Capture "binary-name" BinaryName :> GetBinaryWithOptions
+    :<|> Capture "package-name" PackageName :> Capture "binary-name" BinaryName :> GetBinaryWithOptions
 
 newtype BinaryName = BinaryName {unBinaryName :: String}
   deriving newtype (Show, ToField, FromHttpApiData)
@@ -65,12 +72,37 @@ instance FromHttpApiData Platform where
   parseQueryParam "armv7l-linux" = pure ARMV7_Linux
   parseQueryParam sys = Left $ "Unknown platform: " <> sys
 
--- | A BinaryTriplet uniquely identifies a binary in nixpkgs.
--- A BinaryTriplet is not a proof that that binary exists and is buildable, though.
-data BinaryTriplet = BinaryTriplet
+newtype NixpkgsCommit = NixpkgsCommit { unNixpkgsCommit :: Text }
+  deriving newtype (Show, ToField)
+
+instance FromField NixpkgsCommit where
+  fromField :: Field -> Ok NixpkgsCommit
+  fromField rawCommitField =
+    case fieldData rawCommitField of
+      SQLText rawCommit ->
+        either
+          (returnError ConversionFailed rawCommitField . Text.unpack)
+          pure
+          (mkNixpkgsCommit rawCommit)
+      _ -> returnError Incompatible rawCommitField "NixpkgsCommit field is not SQLText"
+
+mkNixpkgsCommit :: Text -> Either Text NixpkgsCommit
+mkNixpkgsCommit rawCommit
+  | Text.length rawCommit < 3 = Left "too short. must be at least than 3 characters"
+  | Text.length rawCommit > 40 = Left "too long. must be at most 40 characters"
+  | not (Text.all isHexDigit rawCommit) = Left "can only consist of hexidecimal characters (0-9 and a-e)"
+  | otherwise = Right $ NixpkgsCommit rawCommit
+
+instance FromHttpApiData NixpkgsCommit where
+  parseQueryParam = mkNixpkgsCommit
+
+-- | A BinInfo uniquely identifies a binary in nixpkgs.
+-- A BinInfo is not a proof that that binary exists and is buildable, though.
+data BinInfo = BinInfo
   { _tripBinary :: BinaryName,
     _tripPackage :: PackageName,
-    _tripPlatform :: Platform
+    _tripPlatform :: Platform,
+    _tripCommit :: NixpkgsCommit
   }
   deriving (Show)
 
@@ -101,12 +133,36 @@ server (ServerConfig programDB appDB _) =
     :<|> (\bin -> handle bin Nothing)
     :<|> (\pkg bin -> handle bin (Just pkg))
   where
-    handle :: BinaryName -> Maybe PackageName -> Maybe Platform -> Handler BSL.ByteString
-    handle bin mpkg msys =
+    handle :: BinaryName -> Maybe PackageName -> Maybe Platform -> Maybe NixpkgsCommit -> Handler BSL.ByteString
+    handle bin mpkg msys mcommit =
       Handler . withExceptT (\err -> err400 {errBody = BSL.pack err}) $ do
+        commit <- resolveCommit mcommit
         let sys = fromMaybe X86_64_Linux msys
         pkg <- maybe (resolvePackageName programDB bin sys) pure mpkg
-        buildTriplet appDB (BinaryTriplet bin pkg sys)
+        buildTriplet appDB (BinInfo bin pkg sys commit)
+
+-- | The default Nixpkgs commit we use when the user doesn't provide one.
+--
+-- This is nixos-22.05 as of 2022-08-29.
+defaultNixpkgsCommit :: NixpkgsCommit
+defaultNixpkgsCommit = NixpkgsCommit "0ba2543f8c855d7be8e90ef6c8dc89c1617e8a08"
+
+-- | Figure out what 'NixpkgsCommit' to use based on what the user passes in.
+--
+-- If the user doesn't specify a 'NixpkgsCommit', then just use our
+-- 'defaultNixpkgsCommit'.
+--
+-- If the user does specify a 'NixpkgsCommit', make sure it is a prefix of
+-- our 'defaultNixpkgsCommit', and then just use 'defaultNixpkgsCommit'.
+--
+-- TODO: At some point, we'd like to lift the restriction on what commits an
+-- end-user can specify.
+resolveCommit :: Maybe NixpkgsCommit -> ExceptT String IO NixpkgsCommit
+resolveCommit Nothing = pure defaultNixpkgsCommit
+resolveCommit (Just (NixpkgsCommit rawCommit)) = do
+  unless (Text.isPrefixOf rawCommit $ unNixpkgsCommit defaultNixpkgsCommit) $
+    throwError $ "nixpkgs-commit parameter value " <> Text.unpack rawCommit <> " is not allowed"
+  pure defaultNixpkgsCommit
 
 redirectToDocs :: forall a. Handler a
 redirectToDocs = throwError err301 {errHeaders = [("Location", "https://docs.binplz.dev")]}
@@ -122,13 +178,18 @@ resolvePackageName (ProgramDB dbpath) bin sys = do
     [] -> throwError $ "No known package provides " <> unBinaryName bin <> " for " <> show sys <> ". Consider manually specifying the package."
     candidates -> pure $ if coerce bin `elem` candidates then coerce bin else minimum candidates
 
--- | 1. See if we know this BinaryTriplet to be unbuildable
+-- | 1. See if we know this BinInfo to be unbuildable
 --   2. If buildable, build it
 --   3. Bump the count
-buildTriplet :: ApplicationDB -> BinaryTriplet -> ExceptT String IO BSL.ByteString
-buildTriplet appDB trip@(BinaryTriplet bin pkg sys) = withApplicationDB appDB $ \conn -> do
-  liftIO . putStrLn $ "Building " <> show trip
-  errorFlags :: [Only Bool] <- liftIO $ query conn "SELECT error FROM binaries WHERE binary = ? AND package = ? AND platform = ?" (bin, pkg, show sys)
+buildTriplet :: ApplicationDB -> BinInfo -> ExceptT String IO BSL.ByteString
+buildTriplet appDB trip@(BinInfo bin pkg sys commit) = withApplicationDB appDB $ \conn -> do
+  liftIO . putStrLn $ "At Nixpkgs commit " <> show commit <> " building " <> show trip
+  errorFlags :: [Only Bool] <-
+    liftIO $
+      query
+        conn
+        "SELECT error FROM binaries WHERE binary = ? AND package = ? AND platform = ? AND nixpkgsCommit = ?"
+        (bin, pkg, show sys, commit)
   case errorFlags of
     [Only True] -> do
       bump conn
@@ -143,8 +204,8 @@ buildTriplet appDB trip@(BinaryTriplet bin pkg sys) = withApplicationDB appDB $ 
       liftIO $
         execute
           conn
-          "INSERT INTO binaries (binary, package, platform, hits, error) VALUES (?,?,?,?,?)"
-          (bin, pkg, show sys, 1 :: Int, isLeft res)
+          "INSERT INTO binaries (binary, package, platform, nixpkgsCommit, hits, error) VALUES (?, ?, ?, ?, ?, ?)"
+          (bin, pkg, show sys, commit, 1 :: Int, isLeft res)
       ExceptT $ pure res -- equiv to either throwError pure
     [Only False] -> do
       -- TODO Don't invoke nix?
@@ -194,15 +255,16 @@ streamCommand onStdout onStderr cmd args = do
             pure $ pure (exit, stdout, stderr)
           _ -> pure $ throwError "couldn't read process output"
 
-nixBuild :: BinaryTriplet -> IO (Either String BSL.ByteString)
-nixBuild (BinaryTriplet bin pkg sys) = runExceptT $ do
+nixBuild :: BinInfo -> IO (Either String BSL.ByteString)
+nixBuild (BinInfo bin pkg sys commit) = runExceptT $ do
+  -- TODO stream build process to stderr
   -- TODO make sure we can't get any XSS-like shenanigans
   (exit, stdout, stderr) <-
     streamCommand
       (\out -> teePrefix (fromString "out> ") out IO.stdout)
       (\err -> teePrefix (fromString "err> ") err IO.stderr)
       "nix"
-      ( ["build", "nixpkgs#legacyPackages." <> show sys <> ".pkgsStatic." <> unPackageName pkg]
+      ( ["build", "github:NixOS/nixpkgs/" <> Text.unpack (unNixpkgsCommit commit) <> "#legacyPackages." <> show sys <> ".pkgsStatic." <> unPackageName pkg]
           -- Don't make a result symlink, just print it to stdout
           <> ["--no-link", "--print-out-paths"]
           -- Print build logs to stderr
@@ -241,9 +303,10 @@ withApplicationDB (ApplicationDB path) k = ExceptT $
       \ ( binary   TEXT NOT NULL \
       \ , package  TEXT NOT NULL \
       \ , platform TEXT NOT NULL \
+      \ , nixpkgsCommit TEXT NOT NULL \
       \ , hits     INTEGER NOT NULL \
       \ , error    BOOLEAN NOT NULL \
-      \ , PRIMARY KEY (binary, package, platform) )"
+      \ , PRIMARY KEY (binary, package, platform, nixpkgsCommit) )"
     runExceptT (k conn)
 
 -- TODO multithreading
