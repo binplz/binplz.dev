@@ -96,6 +96,11 @@
           nixpkgs.overlays = [ overlay ];
           system.stateVersion = "22.05";
           networking.firewall.allowedTCPPorts = [ port ];
+
+          # We use the --print-out-paths option for `nix build`, which is only
+          # available in nix-2.9.  nixUnstable is nix-2.9 on 22.05.
+          nix.package = pkgs.nixUnstable;
+
           systemd.services.binplz-server = {
             enable = true;
             description = "Binplz binary server";
@@ -166,6 +171,8 @@
     in
     {
       inherit overlay;
+
+      legacyPackages.${system} = pkgs;
 
       devShell.${system} = server-shell;
 
