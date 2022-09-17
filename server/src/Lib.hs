@@ -9,6 +9,7 @@
 
 module Lib (ServerConfig (..), ProgramDB (..), ApplicationDB (..), mainWithConfig) where
 
+import Control.Concurrent (myThreadId)
 import Control.Concurrent.Async (concurrently)
 import Control.Monad
 import Control.Monad.IO.Class
@@ -257,12 +258,19 @@ streamCommand onStdout onStderr cmd args = do
 
 nixBuild :: BinInfo -> IO (Either String BSL.ByteString)
 nixBuild (BinInfo bin pkg sys commit) = runExceptT $ do
+  currThreadId <- liftIO myThreadId
+  let binLogPrefix =
+        unBinaryName bin <> "," <>
+        unPackageName pkg <> "," <>
+        show sys <> "," <>
+        take 7 (Text.unpack $ unNixpkgsCommit commit) <> "," <>
+        show currThreadId
   -- TODO stream build process to stderr
   -- TODO make sure we can't get any XSS-like shenanigans
   (exit, stdout, stderr) <-
     streamCommand
-      (\out -> teePrefix (fromString "out> ") out IO.stdout)
-      (\err -> teePrefix (fromString "err> ") err IO.stderr)
+      (\out -> teePrefix (fromString $ "out: " <> binLogPrefix <> "> ") out IO.stdout)
+      (\err -> teePrefix (fromString $ "err: " <> binLogPrefix <> "> ") err IO.stderr)
       "nix"
       ( ["build", "github:NixOS/nixpkgs/" <> Text.unpack (unNixpkgsCommit commit) <> "#legacyPackages." <> show sys <> ".pkgsStatic." <> unPackageName pkg]
           -- Don't make a result symlink, just print it to stdout
