@@ -43,8 +43,21 @@ chmod 0600 /root/nixbuild.pem
 EOF
 }
 
-output "server_ip_addr" {
-  value = aws_instance.binplz_server.public_ip
+output "public_ip_addr" {
+  value = aws_eip.binplz_eip.public_ip
+}
+
+resource "aws_eip" "binplz_eip" {
+  instance = aws_instance.binplz_server.id
+}
+
+resource "null_resource" "dns_update" {
+  triggers = {
+    ip_change = aws_eip.binplz_eip.public_ip
+  }
+  provisioner "local-exec" {
+    command = "python update_dns.py ${aws_eip.binplz_eip.public_ip}"
+  }
 }
 
 resource "aws_security_group" "my_security_group" {

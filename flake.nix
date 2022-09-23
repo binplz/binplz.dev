@@ -159,6 +159,11 @@
           pkgs.rlwrap
           pkgs.sqlite
           pkgs.age
+
+          (pkgs.python3.withPackages (p: [
+            p.pyopenssl
+            p.requests
+          ]))
         ];
         TF_VAR_binplz_ami_path = "${inputs.self.packages.${system}.server-ami}/${image-name}.vhd";
         # Image name on AWS. The purpose is to invalidate when the image contents change.
