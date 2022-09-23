@@ -9,6 +9,7 @@ import ipaddress
 
 ip = ipaddress.ip_address(sys.argv[1])
 
+# API docs: https://api.transip.nl/rest/docs.html
 api_root = "https://api.transip.nl/v6"
 username = "jonascarpay"
 
