@@ -1,3 +1,14 @@
+"""Binplz DNS update script
+
+Usage: python update_dns.py <root IP address>
+
+Where <root IP address> is the IP address that the A record for the binplz.dev root domain should point to.
+
+This script talks to the transip API to update the binplz.dev settings.
+To do so, we
+  1. Request an API token, signing the request with our transip account's private key
+  2. Request a DNS record update, passing the API token
+"""
 import random
 import requests
 import json
