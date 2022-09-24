@@ -53,6 +53,7 @@ resource "aws_eip" "binplz_eip" {
 
 resource "null_resource" "dns_update" {
   triggers = {
+    # Note that after deploying binplz at least once, we will likely never re-provision this Elastic IP, so it is very unlikely to ever change. 
     ip_change = aws_eip.binplz_eip.public_ip
   }
   provisioner "local-exec" {
