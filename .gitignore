@@ -1,6 +1,7 @@
 secrets/plaintext/
 
-*.qcow2 # QEMU disk images
+# QEMU disk images
+*.qcow2
 
 ### Nix ###
 result
