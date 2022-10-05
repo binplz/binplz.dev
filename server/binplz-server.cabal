@@ -35,6 +35,7 @@ common common-options
     , servant-server
     , sqlite-simple
     , text
+    , time
     , transformers
     , utf8-string
     , warp

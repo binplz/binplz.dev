@@ -46,6 +46,8 @@
       image-name = "binplz-ami-${system}";
       port = 80;
 
+      binplz-log-dir = "/var/log/binplz";
+
       config = {
         amazon = {
           amazonImage.sizeMB = 4096;
@@ -108,7 +110,8 @@
             script = ''
               ${pkgs.binplz-server}/bin/binplz-server \
                 --port ${builtins.toString port} \
-                --program-db ${programs-db}
+                --program-db ${programs-db} \
+                --log-dir ${binplz-log-dir}
             '';
             serviceConfig = {
               Restart = "always";
@@ -131,6 +134,18 @@
           services = {
             openssh.enable = true;
             openssh.permitRootLogin = "prohibit-password";
+            logrotate = {
+              enable = true;
+              settings.${binplz-log-dir + "/*.log"} = {
+                rotate = -1;
+                size = "16M";
+                compress = true;
+                delaycompress = true;
+                dateext = true;
+                missingok = true;
+                notifempty = true;
+              };
+            };
           };
         };
       };

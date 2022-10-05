@@ -42,6 +42,18 @@ getConfig = runOptionParser $ \envOption ->
             optShow = show
           }
       )
+    <*> envOption
+      ( Option
+          { optHelp = "Log file directory",
+            optMetaVar = "DIR",
+            optLong = "log-dir",
+            optShort = 'd',
+            optEnvKey = "BINPLZ_LOG_DIR",
+            optReadM = Opt.str,
+            optDefault = "/var/log/binplz",
+            optShow = show
+          }
+      )
 
 main :: IO ()
 main = do
