@@ -13,7 +13,9 @@ import Control.Concurrent (myThreadId)
 import Control.Concurrent.Async (concurrently)
 import Control.Monad
 import Control.Monad.IO.Class
-import Control.Monad.Trans.Except (ExceptT (..), runExceptT, withExceptT)
+import Control.Monad.Trans.Except (ExceptT (..), runExceptT)
+import Data.Aeson ((.=))
+import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
@@ -27,6 +29,7 @@ import Data.Maybe (fromMaybe)
 import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import qualified Data.Time.Clock.System as Time
 import Database.SQLite.Simple
 import Database.SQLite.Simple.FromField (FromField (..), Field, returnError, fieldData)
 import Database.SQLite.Simple.ToField (ToField (..))
@@ -119,7 +122,8 @@ newtype ProgramDB = ProgramDB {unProgramDB :: FilePath}
 data ServerConfig = ServerConfig
   { _programDB :: ProgramDB,
     _applicationDB :: ApplicationDB,
-    _port :: Port
+    _port :: Port,
+    _logdir :: FilePath
   }
   deriving (Show)
 
@@ -129,18 +133,34 @@ data ServerConfig = ServerConfig
 --   2. Building the triplet
 -- If an error occurs, this is returned as a 400
 server :: ServerConfig -> Server API
-server (ServerConfig programDB appDB _) =
+server (ServerConfig programDB appDB _ logdir) =
   redirectToDocs
     :<|> (\bin -> handle bin Nothing)
     :<|> (\pkg bin -> handle bin (Just pkg))
   where
     handle :: BinaryName -> Maybe PackageName -> Maybe Platform -> Maybe NixpkgsCommit -> Handler BSL.ByteString
-    handle bin mpkg msys mcommit =
-      Handler . withExceptT (\err -> err400 {errBody = BSL.pack err}) $ do
+    handle bin mpkg msys mcommit = Handler $ do
+      mbin <- liftIO . runExceptT $ do
         commit <- resolveCommit mcommit
         let sys = fromMaybe X86_64_Linux msys
         pkg <- maybe (resolvePackageName programDB bin sys) pure mpkg
         buildTriplet appDB (BinInfo bin pkg sys commit)
+      liftIO $ do
+        time <- Time.systemSeconds <$> Time.getSystemTime
+        Dir.createDirectoryIfMissing True logdir
+        let logstring =
+              Aeson.encode . Aeson.object $
+                [ "time" .= time,
+                  "binary" .= unBinaryName bin,
+                  "package" .= maybe Aeson.Null (Aeson.String . Text.pack . unPackageName) mpkg,
+                  "platform" .= maybe Aeson.Null (Aeson.String . Text.pack . show) msys,
+                  "commit" .= maybe Aeson.Null (Aeson.String . unNixpkgsCommit) mcommit,
+                  "result" .= either (Aeson.String . Text.pack) (const "success") mbin
+                ]
+        Lazy.appendFile (logdir </> "requests.log") (logstring <> "\n")
+      case mbin of
+        Left err -> throwError (err400 {errBody = BSL.pack err})
+        Right ok -> pure ok
 
 -- | The default Nixpkgs commit we use when the user doesn't provide one.
 --
