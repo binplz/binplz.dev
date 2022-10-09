@@ -10,8 +10,8 @@ Nix shell with `terraform` and other tools available:
 $ nix develop .#deploy
 ```
 
-The commands in this section all assume you're in this deployment shell, and in
-this current `deploy/` directory.
+**The commands in this section all assume you're in this deployment shell, and in
+this current `deploy/` directory.**
 
 ## First Time
 
@@ -87,7 +87,7 @@ successful.
 -   Connect to the machine with SSH:
 
     ```console
-    $ ssh root@$(terraform output -raw server_ip_addr)
+    $ ssh root@$(terraform output -raw public_ip_addr)
     ```
 
     You should be able to run commands like `ps` or `systemctl` to confirm the
@@ -96,7 +96,7 @@ successful.
 -   Try accessing the API:
 
     ```console
-    $ curl -v http://$(terraform output -raw server_ip_addr)/vim > vim
+    $ curl -v http://$(terraform output -raw public_ip_addr)/vim > vim
     $ chmod +x ./vim
     $ ./vim
     ```
@@ -110,4 +110,25 @@ resources with the following command:
 
 ```console
 $ terraform destroy
+```
+
+## Using the AWS CLI
+
+It is possible to use the AWS CLI for querying the various AWS services.
+
+You'll first need to authenticate with the AWS CLI:
+
+```console
+$ aws configure
+AWS Access Key ID [None]: <ENTER ACCESS KEY>
+AWS Secret Access Key [None]: <ENTER SECRET ACCESS KEY>
+Default region name [None]: us-east-1
+Default output format [None]:
+```
+
+You should then be able to use the CLI:
+
+```console
+$ aws ec2 describe-instances
+...
 ```
