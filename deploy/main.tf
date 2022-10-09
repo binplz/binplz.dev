@@ -24,8 +24,22 @@ terraform {
 }
 
 provider "aws" {
-  region                   = "us-west-2"
+  region                   = "us-east-1"
   shared_credentials_files = ["../secrets/plaintext/aws_credentials"]
+}
+
+locals {
+  # The availability zone to create the EC2 instance and EBS volumes in.  The
+  # AWS instance and EBS volumes need to be in the same AZ.
+  az = "us-east-1e"
+
+  # This is a volume that gets mounted on /nix.
+  #
+  # The AWS docs recommended a device name like "/dev/sdf":
+  # https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/device_naming.html#available-ec2-device-names
+  # But when actually trying to use "/dev/sdf", the actual device gets created
+  # with a name like "/dev/xvdf", so we just use that here.
+  nix_volume_name = "/dev/xvdf"
 }
 
 resource "aws_instance" "binplz_server" {
@@ -33,14 +47,49 @@ resource "aws_instance" "binplz_server" {
   instance_type               = "t2.micro"
   vpc_security_group_ids      = [aws_security_group.my_security_group.id]
   user_data_replace_on_change = true
+  availability_zone           = local.az
 
   # We could also use a file provisioner here, but I've found that to be a bit more fragile since it requires SSH access.
   user_data = <<EOF
 #!/run/current-system/sw/bin/bash
+
 PATH=/run/current-system/sw/bin
 echo "${file("../secrets/plaintext/nixbuild.pem")}" > /root/nixbuild.pem
 chmod 0600 /root/nixbuild.pem
+
+# format the /nix volume if it is not already formatted.
+NIX_VOLUME_FS_TYPE="$(file -s '${local.nix_volume_name}' | awk '{print $2}')"
+
+# If no FS, then this output contains "data"
+if [ "$NIX_VOLUME_FS_TYPE" = "data" ]; then then
+  mkfs.ext4 '${local.nix_volume_name}'
+fi
+
+mkdir -p /mnt/nix
+mount '${local.nix_volume_name}' /mnt/to-be-nix
+cp -rp /nix/* /mnt/nix/
+umount /mnt/nix
+
+mount '${local.nix_volume_name}' /nix
+
 EOF
+}
+
+resource "aws_volume_attachment" "nix_volume_attachement" {
+  device_name = local.nix_volume_name
+  volume_id   = aws_ebs_volume.nix_volume.id
+  instance_id = aws_instance.binplz_server.id
+}
+
+resource "aws_ebs_volume" "nix_volume" {
+  # An EBS volume must be created in a specific AZ.
+  availability_zone = local.az
+  size              = 100 # 100GB disk
+  type              = "gp3"
+
+  tags = {
+    Name = "/nix directory"
+  }
 }
 
 output "public_ip_addr" {
@@ -53,7 +102,8 @@ resource "aws_eip" "binplz_eip" {
 
 resource "null_resource" "dns_update" {
   triggers = {
-    # Note that after deploying binplz at least once, we will likely never re-provision this Elastic IP, so it is very unlikely to ever change. 
+    # Note that after deploying binplz at least once, we will likely never
+    # re-provision this Elastic IP, so it is very unlikely to ever change.
     ip_change = aws_eip.binplz_eip.public_ip
   }
   provisioner "local-exec" {
